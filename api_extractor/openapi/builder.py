@@ -1,0 +1,257 @@
+"""OpenAPI specification builder."""
+
+from typing import List, Dict, Optional, Any
+from api_extractor.core.models import Endpoint, Parameter, Schema, Response as EndpointResponse
+from api_extractor.openapi.models import (
+    OpenAPISpec,
+    Info,
+    PathItem,
+    Operation,
+    ParameterObject,
+    SchemaObject,
+    Response,
+    MediaType,
+    RequestBody,
+    Tag,
+)
+
+
+class OpenAPIBuilder:
+    """Build OpenAPI specification from extracted endpoints."""
+
+    def __init__(
+        self,
+        title: str = "Extracted API",
+        version: str = "1.0.0",
+        description: Optional[str] = None,
+    ) -> None:
+        """
+        Initialize builder.
+
+        Args:
+            title: API title
+            version: API version
+            description: API description
+        """
+        self.title = title
+        self.version = version
+        self.description = description
+
+    def build(self, endpoints: List[Endpoint]) -> OpenAPISpec:
+        """
+        Build OpenAPI specification from endpoints.
+
+        Args:
+            endpoints: List of Endpoint objects
+
+        Returns:
+            OpenAPISpec object
+        """
+        # Group endpoints by path
+        paths: Dict[str, Dict[str, Operation]] = {}
+
+        # Collect all unique tags
+        all_tags = set()
+
+        for endpoint in endpoints:
+            path = endpoint.path
+            method = endpoint.method.value.lower()
+
+            # Convert endpoint to operation
+            operation = self._endpoint_to_operation(endpoint)
+
+            # Collect tags
+            if endpoint.tags:
+                all_tags.update(endpoint.tags)
+
+            # Add to paths
+            if path not in paths:
+                paths[path] = {}
+            paths[path][method] = operation
+
+        # Build PathItem objects
+        path_items: Dict[str, PathItem] = {}
+        for path, operations in paths.items():
+            path_items[path] = PathItem(**operations)
+
+        # Build tags
+        tags = [Tag(name=tag) for tag in sorted(all_tags)]
+
+        # Build specification
+        spec = OpenAPISpec(
+            openapi="3.1.0",
+            info=Info(
+                title=self.title,
+                version=self.version,
+                description=self.description,
+            ),
+            servers=[],
+            paths=path_items,
+            tags=tags if tags else None,
+        )
+
+        return spec
+
+    def _endpoint_to_operation(self, endpoint: Endpoint) -> Operation:
+        """
+        Convert Endpoint to OpenAPI Operation.
+
+        Args:
+            endpoint: Endpoint object
+
+        Returns:
+            Operation object
+        """
+        # Convert parameters
+        parameters = [self._parameter_to_openapi(p) for p in endpoint.parameters]
+
+        # Convert request body
+        request_body = None
+        if endpoint.request_body:
+            request_body = RequestBody(
+                description=endpoint.request_body.description,
+                content={
+                    "application/json": MediaType(
+                        schema_=self._schema_to_openapi(endpoint.request_body)
+                    )
+                },
+                required=True,
+            )
+
+        # Convert responses
+        responses = {}
+        if endpoint.responses:
+            for response in endpoint.responses:
+                responses[response.status_code] = self._response_to_openapi(response)
+        else:
+            # Default response
+            responses["200"] = Response(description="Success")
+
+        # Build operation
+        operation = Operation(
+            tags=endpoint.tags if endpoint.tags else None,
+            summary=endpoint.summary,
+            description=endpoint.description,
+            operation_id=endpoint.operation_id,
+            parameters=parameters if parameters else None,
+            request_body=request_body,
+            responses=responses,
+            deprecated=endpoint.deprecated,
+        )
+
+        return operation
+
+    def _parameter_to_openapi(self, param: Parameter) -> ParameterObject:
+        """
+        Convert Parameter to OpenAPI ParameterObject.
+
+        Args:
+            param: Parameter object
+
+        Returns:
+            ParameterObject
+        """
+        schema = SchemaObject(type=param.type)
+
+        if param.param_schema:
+            schema = self._schema_to_openapi(param.param_schema)
+
+        return ParameterObject.model_validate(
+            {
+                "name": param.name,
+                "in": param.location.value,
+                "description": param.description,
+                "required": param.required,
+                "schema": schema.model_dump(by_alias=True, exclude_none=True) if schema else None,
+            }
+        )
+
+    def _schema_to_openapi(self, schema: Schema) -> SchemaObject:
+        """
+        Convert Schema to OpenAPI SchemaObject.
+
+        Args:
+            schema: Schema object
+
+        Returns:
+            SchemaObject
+        """
+        if schema.ref:
+            return SchemaObject(ref=schema.ref)
+
+        openapi_schema = SchemaObject(
+            type=schema.type,
+            description=schema.description,
+            example=schema.example,
+        )
+
+        if schema.properties:
+            openapi_schema.properties = {
+                name: self._schema_to_openapi(prop) if isinstance(prop, Schema) else SchemaObject(**prop)
+                for name, prop in schema.properties.items()
+            }
+
+        if schema.required:
+            openapi_schema.required = schema.required
+
+        return openapi_schema
+
+    def _response_to_openapi(self, response: EndpointResponse) -> Response:
+        """
+        Convert Response to OpenAPI Response.
+
+        Args:
+            response: EndpointResponse object
+
+        Returns:
+            Response object
+        """
+        content = None
+        if response.response_schema:
+            content = {
+                response.content_type: MediaType(
+                    schema_=self._schema_to_openapi(response.response_schema)
+                )
+            }
+
+        return Response(description=response.description, content=content)
+
+    def to_dict(self, spec: OpenAPISpec) -> Dict[str, Any]:
+        """
+        Convert OpenAPI spec to dictionary.
+
+        Args:
+            spec: OpenAPISpec object
+
+        Returns:
+            Dictionary representation
+        """
+        return spec.model_dump(by_alias=True, exclude_none=True)
+
+    def to_json(self, spec: OpenAPISpec) -> str:
+        """
+        Convert OpenAPI spec to JSON string.
+
+        Args:
+            spec: OpenAPISpec object
+
+        Returns:
+            JSON string
+        """
+        import json
+
+        return json.dumps(self.to_dict(spec), indent=2)
+
+    def to_yaml(self, spec: OpenAPISpec) -> str:
+        """
+        Convert OpenAPI spec to YAML string.
+
+        Args:
+            spec: OpenAPISpec object
+
+        Returns:
+            YAML string
+        """
+        import yaml
+
+        return yaml.dump(self.to_dict(spec), default_flow_style=False, sort_keys=False)
