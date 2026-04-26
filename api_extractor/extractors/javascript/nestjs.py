@@ -1,7 +1,7 @@
 """NestJS framework extractor."""
 
 import re
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Any
 from tree_sitter import Node
 
 from api_extractor.core.base_extractor import BaseExtractor
@@ -11,6 +11,10 @@ from api_extractor.core.models import (
     Parameter,
     HTTPMethod,
     FrameworkType,
+    Schema,
+    Endpoint,
+    Response,
+    ParameterLocation,
 )
 
 
@@ -50,6 +54,9 @@ class NestJSExtractor(BaseExtractor):
         if not tree:
             return routes
 
+        # First, find all DTO classes
+        dto_classes = self._find_dto_classes(tree, source_code)
+
         # Query for all class declarations (works for both exported and non-exported)
         class_query = """
         (class_declaration
@@ -74,7 +81,7 @@ class NestJSExtractor(BaseExtractor):
 
             # Extract routes from this controller
             class_routes = self._extract_routes_from_controller_query(
-                class_body_node, source_code, file_path, controller_info, tree
+                class_body_node, source_code, file_path, controller_info, tree, dto_classes
             )
             routes.extend(class_routes)
 
@@ -119,6 +126,7 @@ class NestJSExtractor(BaseExtractor):
         file_path: str,
         controller_info: Dict[str, any],
         tree,
+        dto_classes: Dict[str, Schema],
     ) -> List[Route]:
         """
         Extract routes from controller using queries.
@@ -129,6 +137,7 @@ class NestJSExtractor(BaseExtractor):
             file_path: Path to source file
             controller_info: Controller path and version info
             tree: Full syntax tree
+            dto_classes: Dictionary of DTO schemas
 
         Returns:
             List of Route objects
@@ -185,6 +194,11 @@ class NestJSExtractor(BaseExtractor):
                                     # Get location
                                     location = self.parser.get_node_location(method_name_node)
 
+                                    # Extract method parameters for schemas
+                                    metadata = self._extract_method_parameters(
+                                        method_node, source_code, dto_classes
+                                    )
+
                                     # Create route
                                     try:
                                         http_method = HTTPMethod[http_decorator.upper()]
@@ -196,6 +210,7 @@ class NestJSExtractor(BaseExtractor):
                                             raw_path=full_path,
                                             source_file=file_path,
                                             source_line=location["start_line"],
+                                            metadata=metadata,
                                         )
                                         routes.append(route)
                                         break  # Only one HTTP method per method
@@ -410,3 +425,342 @@ class NestJSExtractor(BaseExtractor):
         # Replace :param with {param}
         normalized = re.sub(r":([a-zA-Z_][a-zA-Z0-9_]*)", r"{\1}", path)
         return normalized
+
+    def _find_dto_classes(self, tree, source_code: bytes) -> Dict[str, Schema]:
+        """
+        Find all DTO classes (TypeScript classes used for data transfer).
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary mapping class names to Schema objects
+        """
+        dtos = {}
+
+        # Query for all class declarations
+        class_query = """
+        (class_declaration
+          name: (type_identifier) @class_name
+          body: (class_body) @class_body)
+        """
+
+        matches = self.parser.query(tree, class_query, "typescript")
+
+        for match in matches:
+            class_name_node = match.get("class_name")
+            class_body_node = match.get("class_body")
+
+            if not all([class_name_node, class_body_node]):
+                continue
+
+            class_name = self.parser.get_node_text(class_name_node, source_code)
+
+            # Skip controller classes
+            if "Controller" in class_name:
+                continue
+
+            # Parse properties from class body
+            schema = self._parse_dto_class_body(class_body_node, source_code)
+            if schema.properties:  # Only add if it has properties
+                dtos[class_name] = schema
+
+        return dtos
+
+    def _parse_dto_class_body(self, class_body_node: Node, source_code: bytes) -> Schema:
+        """
+        Parse DTO class properties.
+
+        Args:
+            class_body_node: Class body node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object
+        """
+        properties = {}
+        required = []
+
+        # Look for public_field_definition and property_signature nodes
+        for child in class_body_node.children:
+            if child.type in ("public_field_definition", "property_signature"):
+                field_info = self._parse_dto_field(child, source_code)
+                if field_info:
+                    name, field_schema, is_required = field_info
+                    properties[name] = field_schema
+                    if is_required:
+                        required.append(name)
+
+        return Schema(
+            type="object",
+            properties=properties,
+            required=required,
+        )
+
+    def _parse_dto_field(self, field_node: Node, source_code: bytes) -> Optional[Tuple]:
+        """
+        Parse a DTO field definition.
+
+        Args:
+            field_node: Field node
+            source_code: Source code bytes
+
+        Returns:
+            Tuple of (field_name, field_schema_dict, is_required) or None
+        """
+        # Get field name
+        name_node = None
+        type_node = None
+        is_optional = False
+
+        for child in field_node.children:
+            if child.type == "property_identifier":
+                name_node = child
+            elif child.type == "?":
+                is_optional = True
+            elif child.type == "type_annotation":
+                # Get the type inside type_annotation
+                for type_child in child.children:
+                    if type_child.type != ":":
+                        type_node = type_child
+                        break
+
+        if not name_node:
+            return None
+
+        field_name = self.parser.get_node_text(name_node, source_code)
+
+        # Get type
+        field_type = "string"  # default
+        if type_node:
+            type_text = self.parser.get_node_text(type_node, source_code)
+            field_type = self._parse_typescript_type(type_text)
+
+        is_required = not is_optional
+
+        field_schema = {"type": field_type}
+
+        return (field_name, field_schema, is_required)
+
+    def _parse_typescript_type(self, type_text: str) -> str:
+        """
+        Convert TypeScript type to OpenAPI type.
+
+        Args:
+            type_text: TypeScript type string
+
+        Returns:
+            OpenAPI type string
+        """
+        # Clean up type text
+        type_text = type_text.strip()
+
+        # Type mapping
+        type_map = {
+            "string": "string",
+            "number": "number",
+            "boolean": "boolean",
+            "any": "object",
+            "object": "object",
+        }
+
+        # Check for array types
+        if type_text.endswith("[]") or type_text.startswith("Array<"):
+            return "array"
+
+        # Direct mapping
+        if type_text in type_map:
+            return type_map[type_text]
+
+        # If it's a custom type (DTO), treat as object
+        return "object"
+
+    def _extract_method_parameters(
+        self, method_node: Node, source_code: bytes, dto_classes: Dict[str, Schema]
+    ) -> Dict[str, Any]:
+        """
+        Extract method parameters to identify request body and query/param decorators.
+
+        Args:
+            method_node: Method definition node
+            source_code: Source code bytes
+            dto_classes: Dictionary of DTO schemas
+
+        Returns:
+            Dictionary with request_body, query_params, etc.
+        """
+        metadata = {}
+        query_params = []
+        path_params = []
+
+        # Find formal_parameters node
+        params_node = None
+        for child in method_node.children:
+            if child.type == "formal_parameters":
+                params_node = child
+                break
+
+        if not params_node:
+            return metadata
+
+        # Process each parameter
+        for param in params_node.children:
+            if param.type in ("required_parameter", "optional_parameter"):
+                param_info = self._analyze_nestjs_parameter(param, source_code, dto_classes)
+                if param_info:
+                    param_type, param_data = param_info
+                    if param_type == "body":
+                        metadata["request_body"] = param_data
+                    elif param_type == "query":
+                        query_params.append(param_data)
+                    elif param_type == "param":
+                        path_params.append(param_data)
+
+        if query_params:
+            metadata["query_params"] = query_params
+        if path_params:
+            metadata["path_params"] = path_params
+
+        return metadata
+
+    def _analyze_nestjs_parameter(
+        self, param_node: Node, source_code: bytes, dto_classes: Dict[str, Schema]
+    ) -> Optional[Tuple]:
+        """
+        Analyze a NestJS method parameter.
+
+        Args:
+            param_node: Parameter node
+            source_code: Source code bytes
+            dto_classes: Dictionary of DTO schemas
+
+        Returns:
+            Tuple of (param_type, param_data) or None
+        """
+        # Look for decorator
+        decorator_node = None
+        param_name = None
+        type_name = None
+
+        for child in param_node.children:
+            if child.type == "decorator":
+                decorator_node = child
+            elif child.type == "identifier":
+                param_name = self.parser.get_node_text(child, source_code)
+            elif child.type == "type_annotation":
+                # Get the type - could be type_identifier or predefined_type
+                for type_child in child.children:
+                    if type_child.type in ("type_identifier", "predefined_type"):
+                        type_name = self.parser.get_node_text(type_child, source_code)
+                        break
+
+        if not decorator_node:
+            return None
+
+        decorator_text = self.parser.get_node_text(decorator_node, source_code)
+
+        # Check for @Body() decorator
+        if "@Body()" in decorator_text:
+            if type_name and type_name in dto_classes:
+                return ("body", dto_classes[type_name])
+            return None
+
+        # Check for @Param decorator
+        if "@Param(" in decorator_text:
+            # Extract parameter name from decorator
+            param_match = re.search(r"@Param\(['\"]([^'\"]+)['\"]\)", decorator_text)
+            if param_match:
+                param_name_from_decorator = param_match.group(1)
+                # Determine type from type annotation
+                param_type = "string"
+                if type_name:
+                    param_type = self._parse_typescript_type(type_name)
+
+                param_obj = Parameter(
+                    name=param_name_from_decorator,
+                    location=ParameterLocation.PATH,
+                    type=param_type,
+                    required=True,
+                )
+                return ("param", param_obj)
+
+        # Check for @Query decorator
+        if "@Query(" in decorator_text:
+            # Extract parameter name from decorator
+            param_match = re.search(r"@Query\(['\"]([^'\"]+)['\"]\)", decorator_text)
+            if param_match:
+                param_name_from_decorator = param_match.group(1)
+                # Determine type from type annotation
+                param_type = "string"
+                if type_name:
+                    param_type = self._parse_typescript_type(type_name)
+
+                # Check if optional (has ? in parameter)
+                is_required = "?" not in self.parser.get_node_text(param_node, source_code)
+
+                param_obj = Parameter(
+                    name=param_name_from_decorator,
+                    location=ParameterLocation.QUERY,
+                    type=param_type,
+                    required=is_required,
+                )
+                return ("query", param_obj)
+
+        return None
+
+    def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
+        """
+        Convert a Route to one or more Endpoint objects.
+
+        Overridden to handle DTO schemas.
+
+        Args:
+            route: Route object
+
+        Returns:
+            List of Endpoint objects (one per HTTP method)
+        """
+        endpoints = []
+
+        for method in route.methods:
+            # Parse path parameters from path
+            parameters = self._extract_path_parameters(route.raw_path)
+
+            # Add parameters from metadata
+            if "query_params" in route.metadata:
+                parameters.extend(route.metadata["query_params"])
+            if "path_params" in route.metadata:
+                # Replace auto-extracted path params with decorated ones which have types
+                # Remove auto-extracted params that are in decorated params
+                decorated_param_names = {p.name for p in route.metadata["path_params"]}
+                parameters = [p for p in parameters if p.name not in decorated_param_names]
+                parameters.extend(route.metadata["path_params"])
+
+            # Get request body from metadata
+            request_body = route.metadata.get("request_body")
+
+            # Create default response
+            responses = [
+                Response(
+                    status_code="200",
+                    description="Success",
+                    content_type="application/json",
+                )
+            ]
+
+            endpoint = Endpoint(
+                path=self._normalize_path(route.raw_path),
+                method=method,
+                parameters=parameters,
+                request_body=request_body,
+                responses=responses,
+                tags=[self.framework.value],
+                operation_id=route.handler_name,
+                source_file=route.source_file,
+                source_line=route.source_line,
+            )
+
+            endpoints.append(endpoint)
+
+        return endpoints

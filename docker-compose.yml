@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  api-extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: api-extractor
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount local code directory for analysis
+      - ./code-to-analyze:/app/code:ro
+      # Optionally mount custom configuration
+      # - ./.env:/app/.env:ro
+    environment:
+      # Server configuration
+      - API_EXTRACTOR_HOST=0.0.0.0
+      - API_EXTRACTOR_PORT=8000
+      - API_EXTRACTOR_LOG_LEVEL=info
+
+      # Security settings
+      - API_EXTRACTOR_ALLOWED_PATH_PREFIXES=/app/code,/tmp
+      - API_EXTRACTOR_ENABLE_S3=true
+
+      # Optional: AWS credentials for S3 support
+      # - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      # - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      # - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - api-extractor-network
+
+networks:
+  api-extractor-network:
+    driver: bridge

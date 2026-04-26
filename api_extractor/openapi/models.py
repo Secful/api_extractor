@@ -60,6 +60,8 @@ class SchemaObject(BaseModel):
 class ParameterObject(BaseModel):
     """Parameter object."""
 
+    model_config = {"populate_by_name": True}
+
     name: str
     in_: str = Field(..., alias="in")
     description: Optional[str] = None
@@ -71,6 +73,8 @@ class ParameterObject(BaseModel):
 
 class MediaType(BaseModel):
     """Media type object."""
+
+    model_config = {"populate_by_name": True}
 
     schema_: Optional[SchemaObject] = Field(None, alias="schema")
     example: Optional[Any] = None
@@ -95,6 +99,8 @@ class Response(BaseModel):
 
 class Operation(BaseModel):
     """Operation object."""
+
+    model_config = {"populate_by_name": True}
 
     tags: Optional[List[str]] = None
     summary: Optional[str] = None

@@ -20,7 +20,13 @@ pip install -e .
 
 ## Usage
 
-### Basic Usage
+API Extractor can be used in two modes:
+1. **CLI Mode** - Command-line tool for batch extraction
+2. **HTTP Server Mode** - HTTP API for on-demand analysis
+
+### CLI Mode
+
+#### Basic Usage
 
 Extract API definitions from a local directory:
 
@@ -34,14 +40,6 @@ Generate YAML output:
 
 ```bash
 api-extractor extract /path/to/project --output api-spec.yaml --format yaml
-```
-
-### Manual Framework Specification
-
-Bypass automatic detection:
-
-```bash
-api-extractor extract /path/to/project --framework flask --framework express
 ```
 
 ### S3 Source
@@ -80,7 +78,6 @@ api-extractor extract <PATH> [OPTIONS]
 |--------|-------|------|---------|-------------|
 | `--output` | `-o` | path | `openapi.json` | Output file path |
 | `--format` | `-f` | choice | `json` | Output format (`json` or `yaml`) |
-| `--framework` | `-w` | choice | auto-detect | Framework(s) to extract (can specify multiple times) |
 | `--s3` | - | flag | false | Treat path as S3 URI |
 | `--verbose` | `-v` | flag | false | Show detailed extraction progress |
 | `--title` | - | string | `Extracted API` | API title in OpenAPI spec |
@@ -89,7 +86,7 @@ api-extractor extract <PATH> [OPTIONS]
 
 ### Supported Frameworks
 
-Use with `--framework` option:
+Automatically detected:
 - `fastapi` - FastAPI (Python)
 - `flask` - Flask (Python)
 - `django_rest` - Django REST Framework (Python)
@@ -111,11 +108,6 @@ Use with `--framework` option:
 api-extractor extract /path/to/project
 ```
 
-**Multiple frameworks:**
-```bash
-api-extractor extract . --framework flask --framework express
-```
-
 **Custom output with metadata:**
 ```bash
 api-extractor extract . \
@@ -133,14 +125,342 @@ api-extractor extract s3://my-bucket/code/ \
   --output openapi.json
 ```
 
-**Specific framework (bypass detection):**
-```bash
-api-extractor extract . --framework fastapi
-```
-
 ### Environment Variables
 
-None currently supported. All configuration is via CLI arguments.
+None currently supported for CLI mode. All configuration is via CLI arguments.
+
+---
+
+## HTTP Server Mode
+
+API Extractor can run as an HTTP server, exposing REST API endpoints for on-demand code analysis. This mode is ideal for:
+- Integration with other services requiring runtime API discovery
+- Web-based UIs and dashboards for API analysis
+- Deployment as a microservice/sidecar in containerized environments
+- Programmatic access to extraction capabilities
+
+### Starting the Server
+
+```bash
+api-extractor serve
+```
+
+The server will start on `http://0.0.0.0:8000` by default.
+
+**Custom host and port:**
+```bash
+api-extractor serve --host 127.0.0.1 --port 9000
+```
+
+**Development mode with auto-reload:**
+```bash
+api-extractor serve --reload --log-level debug
+```
+
+### API Endpoints
+
+#### Health Check
+**GET** `/api/v1/health`
+
+Check if the service is healthy and responsive.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "version": "0.1.0"
+}
+```
+
+#### Service Information
+**GET** `/api/v1/info`
+
+Get information about service capabilities and supported frameworks.
+
+**Response:**
+```json
+{
+  "version": "0.1.0",
+  "supported_frameworks": ["fastapi", "flask", "django_rest", "express", "nestjs", "fastify"],
+  "features": {
+    "s3_support": true,
+    "auto_detection": true,
+    "multiple_frameworks": true
+  }
+}
+```
+
+#### Analyze Codebase
+**POST** `/api/v1/analyze`
+
+Extract REST API definitions from source code and generate OpenAPI specification.
+
+**Request Body:**
+```json
+{
+  "path": "/path/to/code",
+  "s3": false,
+  "title": "My API",
+  "version": "1.0.0",
+  "description": "API description"
+}
+```
+
+**Parameters:**
+- `path` (required): Path to codebase (local directory or S3 URI)
+- `s3` (optional, default: false): Whether path is an S3 URI
+- `title` (optional, default: "Extracted API"): API title for OpenAPI spec
+- `version` (optional, default: "1.0.0"): API version for OpenAPI spec
+- `description` (optional): API description for OpenAPI spec
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "openapi_spec": {
+    "openapi": "3.1.0",
+    "info": {
+      "title": "My API",
+      "version": "1.0.0"
+    },
+    "paths": { ... }
+  },
+  "endpoints_count": 5,
+  "frameworks_detected": ["fastapi"],
+  "errors": [],
+  "warnings": [],
+  "metadata": {
+    "source_path": "/path/to/code",
+    "is_s3": false,
+    "frameworks_used": ["fastapi"]
+  }
+}
+```
+
+**Error Responses:**
+- `400 Bad Request` - Invalid request (bad path, invalid framework)
+- `403 Forbidden` - Forbidden path (security violation)
+- `404 Not Found` - Path not found
+- `422 Validation Error` - Request validation failed
+- `500 Internal Server Error` - Server error
+
+### API Documentation
+
+Interactive API documentation is automatically generated and available at:
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+- **OpenAPI JSON**: `http://localhost:8000/openapi.json`
+
+### Example Usage
+
+**Using curl:**
+```bash
+# Analyze local codebase
+curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "path": "/path/to/code",
+    "s3": false
+  }'
+
+# Health check
+curl http://localhost:8000/api/v1/health
+```
+
+**Using Python requests:**
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/api/v1/analyze",
+    json={
+        "path": "/path/to/code",
+        "title": "My API",
+        "version": "1.0.0"
+    }
+)
+
+result = response.json()
+if result["success"]:
+    print(f"Found {result['endpoints_count']} endpoints")
+    print(result["openapi_spec"])
+```
+
+### Server Configuration
+
+Configuration can be set via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `API_EXTRACTOR_HOST` | `0.0.0.0` | Server host |
+| `API_EXTRACTOR_PORT` | `8000` | Server port |
+| `API_EXTRACTOR_LOG_LEVEL` | `info` | Logging level |
+| `API_EXTRACTOR_ALLOWED_PATH_PREFIXES` | (empty) | Comma-separated whitelist of allowed path prefixes |
+| `API_EXTRACTOR_ENABLE_S3` | `true` | Enable S3 support |
+
+**Example with environment variables:**
+```bash
+export API_EXTRACTOR_HOST=127.0.0.1
+export API_EXTRACTOR_PORT=9000
+export API_EXTRACTOR_LOG_LEVEL=debug
+export API_EXTRACTOR_ALLOWED_PATH_PREFIXES=/app/code,/tmp
+api-extractor serve
+```
+
+### Security
+
+The HTTP server includes several security features:
+
+1. **Path Traversal Prevention** - Blocks paths containing `..` or `~`
+2. **System Directory Protection** - Forbidden: `/etc`, `/usr`, `/bin`, `/sbin`, `/root`, `/boot`, `/sys`, `/proc`, `/dev`
+3. **Path Whitelist** - Optional whitelist of allowed path prefixes via `API_EXTRACTOR_ALLOWED_PATH_PREFIXES`
+4. **S3 URI Validation** - Ensures S3 paths start with `s3://` and have valid format
+
+**Example security configuration:**
+```bash
+# Only allow analysis of code in /app/code and /tmp
+export API_EXTRACTOR_ALLOWED_PATH_PREFIXES=/app/code,/tmp
+api-extractor serve
+```
+
+### Docker Deployment
+
+#### Using Docker
+
+**Build the image:**
+```bash
+docker build -t api-extractor .
+```
+
+**Run the container:**
+```bash
+docker run -d \
+  -p 8000:8000 \
+  -v /path/to/code:/app/code:ro \
+  -e API_EXTRACTOR_ALLOWED_PATH_PREFIXES=/app/code \
+  --name api-extractor \
+  api-extractor
+```
+
+**Test the container:**
+```bash
+curl http://localhost:8000/api/v1/health
+```
+
+#### Using Docker Compose
+
+**docker-compose.yml** is included in the repository.
+
+**Start the service:**
+```bash
+# Place code to analyze in ./code-to-analyze directory
+mkdir -p code-to-analyze
+cp -r /path/to/your/code code-to-analyze/
+
+# Start the service
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the service
+docker-compose down
+```
+
+**Analyze code in container:**
+```bash
+curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "path": "/app/code"
+  }'
+```
+
+#### Docker Configuration
+
+The Docker image includes:
+- Python 3.11 slim base image
+- Health check configured (checks `/api/v1/health` every 30s)
+- Volume mount at `/app/code` for analyzed code
+- Security whitelist set to `/app/code` and `/tmp`
+- CORS enabled for web UIs
+
+**Environment variables in Docker:**
+```yaml
+environment:
+  - API_EXTRACTOR_HOST=0.0.0.0
+  - API_EXTRACTOR_PORT=8000
+  - API_EXTRACTOR_LOG_LEVEL=info
+  - API_EXTRACTOR_ALLOWED_PATH_PREFIXES=/app/code,/tmp
+  - API_EXTRACTOR_ENABLE_S3=true
+  # Optional: AWS credentials for S3
+  - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+  - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+  - AWS_DEFAULT_REGION=us-east-1
+```
+
+### Kubernetes Deployment
+
+**Example deployment manifest:**
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-extractor
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-extractor
+  template:
+    metadata:
+      labels:
+        app: api-extractor
+    spec:
+      containers:
+      - name: api-extractor
+        image: api-extractor:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: API_EXTRACTOR_ALLOWED_PATH_PREFIXES
+          value: "/app/code"
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/code
+          readOnly: true
+      volumes:
+      - name: code-volume
+        persistentVolumeClaim:
+          claimName: code-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-extractor
+spec:
+  selector:
+    app: api-extractor
+  ports:
+  - port: 80
+    targetPort: 8000
+  type: LoadBalancer
+```
+
+---
 
 ## Supported Frameworks
 
@@ -331,8 +651,39 @@ api_extractor/
 ├── openapi/
 │   ├── models.py          # OpenAPI models
 │   └── builder.py         # OpenAPI spec builder
-└── cli.py                 # CLI interface
+├── service/
+│   ├── extractor_service.py  # Core extraction service
+│   └── models.py          # Service result models
+├── server/
+│   ├── app.py             # FastAPI application
+│   ├── config.py          # Server configuration
+│   ├── security.py        # Security validation
+│   └── api/
+│       ├── routes.py      # HTTP endpoints
+│       └── schemas.py     # Request/response schemas
+└── cli.py                 # CLI interface (extract + serve)
 ```
+
+### Architecture Layers
+
+The application uses a **3-tier architecture**:
+
+1. **Interface Layer** (CLI + HTTP)
+   - CLI commands (`extract`, `serve`)
+   - FastAPI HTTP endpoints (`/api/v1/analyze`, `/api/v1/health`, `/api/v1/info`)
+   - Handles user input, validation, and output formatting
+
+2. **Service Layer**
+   - `ExtractionService` - Core extraction logic
+   - Framework-agnostic extraction workflow
+   - Result aggregation and error handling
+   - Shared by both CLI and HTTP interfaces
+
+3. **Extraction Layer**
+   - Framework-specific extractors
+   - Tree-sitter AST parsing
+   - Route detection and normalization
+   - OpenAPI spec generation
 
 ### Implementation Approach
 
@@ -396,7 +747,6 @@ See existing extractors like `express.py` or `nestjs.py` for reference implement
 ### No endpoints found
 - Ensure you're running the extractor on the correct directory (source code, not build artifacts)
 - Check that the framework is correctly detected with `--verbose` flag
-- Try manually specifying the framework with `--framework`
 
 ### Routes missing from output
 - For Express: Ensure routers are defined and mounted in the same file

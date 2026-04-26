@@ -47,10 +47,13 @@ class Schema(BaseModel):
     description: Optional[str] = None
     example: Optional[Any] = None
     ref: Optional[str] = None  # Reference to a reusable schema
+    items: Optional[Any] = None  # For array type schemas
 
 
 class Parameter(BaseModel):
     """API parameter definition."""
+
+    model_config = {"populate_by_name": True}
 
     name: str
     location: ParameterLocation
@@ -63,6 +66,8 @@ class Parameter(BaseModel):
 
 class Response(BaseModel):
     """API response definition."""
+
+    model_config = {"populate_by_name": True}
 
     status_code: str = "200"
     description: str = "Success"

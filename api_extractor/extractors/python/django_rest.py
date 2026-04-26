@@ -1,7 +1,7 @@
 """Django REST Framework extractor."""
 
 import re
-from typing import List, Optional, Dict, Set
+from typing import List, Optional, Dict, Set, Any
 from tree_sitter import Node
 
 from api_extractor.core.base_extractor import BaseExtractor
@@ -10,6 +10,9 @@ from api_extractor.core.models import (
     Parameter,
     HTTPMethod,
     FrameworkType,
+    Schema,
+    Endpoint,
+    Response,
 )
 
 
@@ -29,10 +32,149 @@ class DjangoRESTExtractor(BaseExtractor):
     def __init__(self) -> None:
         """Initialize Django REST extractor."""
         super().__init__(FrameworkType.DJANGO_REST)
+        # Map of ViewSet class names to their registered paths
+        # e.g., {"SnippetViewSet": "snippets", "UserViewSet": "users"}
+        self.viewset_registrations: Dict[str, str] = {}
 
     def get_file_extensions(self) -> List[str]:
         """Get Python file extensions."""
         return [".py"]
+
+    def extract(self, path: str):
+        """
+        Override extract to do two-pass extraction:
+        1. First pass: scan urls.py files to find router.register() calls
+        2. Second pass: extract ViewSets from views.py with correct paths
+
+        Args:
+            path: Path to codebase directory
+
+        Returns:
+            ExtractionResult with endpoints and any errors
+        """
+        self.endpoints = []
+        self.errors = []
+        self.warnings = []
+        self.viewset_registrations = {}
+
+        # Find all relevant files
+        files = self._find_source_files(path)
+
+        # Pass 1: Extract router registrations from urls.py files
+        for file_path in files:
+            if file_path.endswith('urls.py'):
+                try:
+                    self._extract_router_registrations(file_path)
+                except Exception as e:
+                    self.errors.append(f"Error extracting router registrations from {file_path}: {str(e)}")
+
+        # Pass 2: Extract routes from all files (now with registration info)
+        all_routes = []
+        for file_path in files:
+            try:
+                routes = self.extract_routes_from_file(file_path)
+                all_routes.extend(routes)
+            except Exception as e:
+                self.errors.append(f"Error extracting from {file_path}: {str(e)}")
+
+        # Convert routes to endpoints
+        for route in all_routes:
+            try:
+                endpoints = self._route_to_endpoints(route)
+                self.endpoints.extend(endpoints)
+            except Exception as e:
+                self.errors.append(f"Error converting route to endpoint: {str(e)}")
+
+        # Determine success
+        success = len(self.endpoints) > 0 and len(self.errors) == 0
+
+        from api_extractor.core.models import ExtractionResult
+        return ExtractionResult(
+            success=success,
+            endpoints=self.endpoints,
+            errors=self.errors,
+            warnings=self.warnings,
+            frameworks_detected=[self.framework],
+        )
+
+    def _extract_router_registrations(self, file_path: str) -> None:
+        """
+        Extract router.register() calls from urls.py file.
+
+        Parses patterns like:
+        router.register(r'snippets', views.SnippetViewSet)
+        router.register('users', UserViewSet)
+
+        Args:
+            file_path: Path to urls.py file
+        """
+        source_code = self._read_file(file_path)
+        if not source_code:
+            return
+
+        tree = self.parser.parse_source(source_code, "python")
+        if not tree:
+            return
+
+        # Query for router.register() calls
+        register_query = """
+        (expression_statement
+          (call
+            function: (attribute
+              object: (identifier) @router_name
+              attribute: (identifier) @method_name)
+            arguments: (argument_list) @args))
+        """
+
+        matches = self.parser.query(tree, register_query, "python")
+        for match in matches:
+            router_name_node = match.get("router_name")
+            method_name_node = match.get("method_name")
+            args_node = match.get("args")
+
+            if not all([router_name_node, method_name_node, args_node]):
+                continue
+
+            router_name = self.parser.get_node_text(router_name_node, source_code)
+            method_name = self.parser.get_node_text(method_name_node, source_code)
+
+            # Check if this is router.register()
+            if method_name != "register":
+                continue
+
+            # Extract arguments: path prefix and ViewSet class
+            args = []
+            for child in args_node.children:
+                if child.type in ("string", "raw_string_literal"):
+                    # Extract path prefix (first argument)
+                    path_text = self.parser.get_node_text(child, source_code)
+                    # Remove r' or ' or " prefix and trailing quote
+                    path_value = path_text.strip()
+                    # Handle r'snippets', 'snippets', or "snippets"
+                    if path_value.startswith(("r'", 'r"')):
+                        path_value = path_value[2:-1]
+                    elif path_value.startswith(("'", '"')):
+                        path_value = path_value[1:-1]
+                    if path_value:
+                        args.append(path_value)
+                elif child.type == "attribute":
+                    # Extract ViewSet class name like views.SnippetViewSet
+                    viewset_name = self.parser.get_node_text(child, source_code)
+                    # Get just the class name part
+                    if "." in viewset_name:
+                        viewset_name = viewset_name.split(".")[-1]
+                    args.append(viewset_name)
+                elif child.type == "identifier":
+                    # Direct identifier without module prefix
+                    viewset_name = self.parser.get_node_text(child, source_code)
+                    args.append(viewset_name)
+
+            # Should have at least 2 args: path and ViewSet
+            if len(args) >= 2:
+                path_prefix = args[0]
+                viewset_class = args[1]
+                # Store the mapping
+                self.viewset_registrations[viewset_class] = path_prefix
 
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
         """
@@ -55,6 +197,9 @@ class DjangoRESTExtractor(BaseExtractor):
         tree = self.parser.parse_source(source_code, "python")
         if not tree:
             return routes
+
+        # First, find all serializer classes
+        serializers = self._find_serializers(tree, source_code)
 
         # Query 1: Find ViewSet/APIView classes with base classes
         class_query = """
@@ -90,14 +235,26 @@ class DjangoRESTExtractor(BaseExtractor):
             if not is_viewset and not is_apiview:
                 continue
 
-            # Extract routes from this class
-            base_path = self._generate_path_from_class_name(class_name)
+            # Get the registered path for this ViewSet, or generate one as fallback
+            if class_name in self.viewset_registrations:
+                base_path = f"/{self.viewset_registrations[class_name]}/"
+            else:
+                base_path = self._generate_path_from_class_name(class_name)
+
             location = self.parser.get_node_location(class_name_node)
+
+            # Find serializer_class for this ViewSet
+            serializer_class_name = None
+            if is_viewset:
+                serializer_class_name = self._find_serializer_class_for_viewset(
+                    body_node, source_code
+                )
 
             if is_viewset:
                 routes.extend(
                     self._extract_viewset_routes_query(
-                        body_node, source_code, file_path, base_path, location, tree
+                        body_node, source_code, file_path, base_path, location, tree,
+                        serializers, serializer_class_name, bases
                     )
                 )
             elif is_apiview:
@@ -204,6 +361,9 @@ class DjangoRESTExtractor(BaseExtractor):
         base_path: str,
         location: Dict,
         tree,
+        serializers: Dict[str, Schema],
+        serializer_class_name: Optional[str],
+        bases: List[str],
     ) -> List[Route]:
         """
         Extract routes from ViewSet class using queries.
@@ -215,52 +375,74 @@ class DjangoRESTExtractor(BaseExtractor):
             base_path: Base path for this ViewSet
             location: Source location info
             tree: Full syntax tree
+            serializers: Dictionary of serializer schemas
+            serializer_class_name: Name of serializer_class for this ViewSet
+            bases: List of base class names
 
         Returns:
             List of Route objects
         """
         routes = []
 
-        # Query for standard ViewSet methods
-        viewset_method_query = """
-        (function_definition
-          name: (identifier) @method_name)
-        """
+        # Get the serializer schema if available
+        serializer_schema = None
+        if serializer_class_name and serializer_class_name in serializers:
+            serializer_schema = serializers[serializer_class_name]
 
-        # Execute query within the class body
-        method_matches = self.parser.query(tree, viewset_method_query, "python")
+        # Determine which standard methods this ViewSet should have
+        # Check ReadOnlyModelViewSet first since it contains "ModelViewSet" in the name
+        standard_methods = []
+        is_readonly_viewset = any("ReadOnlyModelViewSet" in base for base in bases)
+        is_model_viewset = any("ModelViewSet" in base for base in bases) and not is_readonly_viewset
 
-        for match in method_matches:
-            method_name_node = match.get("method_name")
-            if not method_name_node:
-                continue
+        if is_readonly_viewset:
+            # ReadOnlyModelViewSet provides only list and retrieve
+            standard_methods = ["list", "retrieve"]
+        elif is_model_viewset:
+            # ModelViewSet provides all CRUD operations
+            standard_methods = ["list", "create", "retrieve", "update", "partial_update", "destroy"]
 
-            # Check if this node is within our body_node
-            if not self._is_node_within(method_name_node, body_node):
-                continue
+        # Generate routes for standard ViewSet methods
+        for method_name in standard_methods:
+            http_method = self.VIEWSET_METHODS[method_name]
 
-            method_name = self.parser.get_node_text(method_name_node, source_code)
+            # Determine path (list vs detail)
+            if method_name in ["list", "create"]:
+                path = base_path
+            else:
+                # Remove trailing slash from base_path before adding /{pk}/
+                base = base_path.rstrip('/')
+                path = f"{base}/{{pk}}/"
 
-            # Check if it's a standard ViewSet method
-            if method_name in self.VIEWSET_METHODS:
-                http_method = self.VIEWSET_METHODS[method_name]
+            # Build metadata with serializer schemas based on method
+            metadata = {}
+            if serializer_schema:
+                if method_name == "create":
+                    # POST uses serializer for request body
+                    metadata["request_body"] = serializer_schema
+                elif method_name in ["update", "partial_update"]:
+                    # PUT/PATCH uses serializer for request body
+                    metadata["request_body"] = serializer_schema
+                elif method_name in ["retrieve", "list"]:
+                    # GET returns serializer as response
+                    metadata["response_schema"] = serializer_schema
+                    if method_name == "list":
+                        metadata["response_is_list"] = True
 
-                # Determine path (list vs detail)
-                if method_name in ["list", "create"]:
-                    path = base_path
-                else:
-                    path = f"{base_path}/{{pk}}"
+            route = Route(
+                path=path,
+                methods=[http_method],
+                handler_name=method_name,
+                framework=self.framework,
+                raw_path=path,
+                source_file=file_path,
+                source_line=location["start_line"],
+                metadata=metadata,
+            )
+            routes.append(route)
 
-                route = Route(
-                    path=path,
-                    methods=[http_method],
-                    handler_name=method_name,
-                    framework=self.framework,
-                    raw_path=path,
-                    source_file=file_path,
-                    source_line=location["start_line"],
-                )
-                routes.append(route)
+        # Note: We already generated routes for standard methods above,
+        # so we don't need to query for them again
 
         # Query for @action decorated methods
         action_query = """
@@ -328,11 +510,12 @@ class DjangoRESTExtractor(BaseExtractor):
                                                 except KeyError:
                                                     pass
 
-            # Build path
+            # Build path (normalize base_path to avoid double slashes)
+            base = base_path.rstrip('/')
             if is_detail:
-                path = f"{base_path}/{{pk}}/{method_name}"
+                path = f"{base}/{{pk}}/{method_name}/"
             else:
-                path = f"{base_path}/{method_name}"
+                path = f"{base}/{method_name}/"
 
             for http_method in http_methods:
                 route = Route(
@@ -476,3 +659,247 @@ class DjangoRESTExtractor(BaseExtractor):
             Normalized path
         """
         return path
+
+    def _find_serializers(self, tree, source_code: bytes) -> Dict[str, Schema]:
+        """
+        Find all Serializer classes in the file.
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary mapping serializer names to Schema objects
+        """
+        serializers = {}
+
+        # Query for classes inheriting from serializers.Serializer
+        class_query = """
+        (class_definition
+          name: (identifier) @class_name
+          superclasses: (argument_list) @superclasses
+          body: (block) @class_body)
+        """
+
+        matches = self.parser.query(tree, class_query, "python")
+
+        for match in matches:
+            class_name_node = match.get("class_name")
+            superclasses_node = match.get("superclasses")
+            class_body_node = match.get("class_body")
+
+            if not all([class_name_node, superclasses_node, class_body_node]):
+                continue
+
+            # Check if it inherits from serializers.Serializer
+            superclasses_text = self.parser.get_node_text(superclasses_node, source_code)
+            if "Serializer" not in superclasses_text:
+                continue
+
+            class_name = self.parser.get_node_text(class_name_node, source_code)
+
+            # Parse fields from class body
+            schema = self._parse_serializer_class_body(class_body_node, source_code)
+            serializers[class_name] = schema
+
+        return serializers
+
+    def _parse_serializer_class_body(self, class_body_node: Node, source_code: bytes) -> Schema:
+        """
+        Parse serializer field definitions from class body.
+
+        Args:
+            class_body_node: Class body node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object
+        """
+        properties = {}
+        required = []
+
+        # Look for field assignments: field_name = serializers.FieldType(...)
+        for child in class_body_node.children:
+            if child.type == "expression_statement":
+                for expr_child in child.children:
+                    if expr_child.type == "assignment":
+                        field_info = self._parse_serializer_field(expr_child, source_code)
+                        if field_info:
+                            name, field_schema, is_required = field_info
+                            properties[name] = field_schema
+                            if is_required:
+                                required.append(name)
+
+        return Schema(
+            type="object",
+            properties=properties,
+            required=required,
+        )
+
+    def _parse_serializer_field(self, assignment_node: Node, source_code: bytes) -> Optional[tuple]:
+        """
+        Parse a serializer field definition.
+
+        Args:
+            assignment_node: Assignment node
+            source_code: Source code bytes
+
+        Returns:
+            Tuple of (field_name, field_schema_dict, is_required) or None
+        """
+        # Get left side (field name)
+        left = assignment_node.child_by_field_name("left")
+        if not left or left.type != "identifier":
+            return None
+
+        field_name = self.parser.get_node_text(left, source_code)
+
+        # Get right side (field definition)
+        right = assignment_node.child_by_field_name("right")
+        if not right or right.type != "call":
+            return None
+
+        # Get the field type from call expression
+        call_text = self.parser.get_node_text(right, source_code)
+
+        # Parse field type
+        field_type, constraints = self._parse_field_type_and_constraints(call_text)
+
+        # Fields are required by default in DRF unless required=False
+        is_required = "required=False" not in call_text
+
+        field_schema = {"type": field_type}
+        field_schema.update(constraints)
+
+        return (field_name, field_schema, is_required)
+
+    def _parse_field_type_and_constraints(self, call_text: str) -> tuple:
+        """
+        Parse field type and constraints from field definition.
+
+        Args:
+            call_text: Field definition call text
+
+        Returns:
+            Tuple of (openapi_type, constraints_dict)
+        """
+        constraints = {}
+
+        # Map DRF field types to OpenAPI types
+        if "IntegerField" in call_text:
+            field_type = "integer"
+        elif "DecimalField" in call_text or "FloatField" in call_text:
+            field_type = "number"
+        elif "BooleanField" in call_text:
+            field_type = "boolean"
+        elif "EmailField" in call_text or "CharField" in call_text or "TextField" in call_text:
+            field_type = "string"
+            if "EmailField" in call_text:
+                constraints["format"] = "email"
+        elif "DateTimeField" in call_text:
+            field_type = "string"
+            constraints["format"] = "date-time"
+        elif "DateField" in call_text:
+            field_type = "string"
+            constraints["format"] = "date"
+        elif "ListField" in call_text:
+            field_type = "array"
+        else:
+            field_type = "string"
+
+        # Extract max_length constraint
+        import re
+        max_length_match = re.search(r"max_length=(\d+)", call_text)
+        if max_length_match:
+            constraints["maxLength"] = int(max_length_match.group(1))
+
+        # Extract max_digits and decimal_places for DecimalField
+        max_digits_match = re.search(r"max_digits=(\d+)", call_text)
+        if max_digits_match:
+            constraints["maximum"] = 10 ** int(max_digits_match.group(1))
+
+        return (field_type, constraints)
+
+    def _find_serializer_class_for_viewset(
+        self, class_body_node: Node, source_code: bytes
+    ) -> Optional[str]:
+        """
+        Find serializer_class attribute in ViewSet body.
+
+        Args:
+            class_body_node: Class body node
+            source_code: Source code bytes
+
+        Returns:
+            Serializer class name or None
+        """
+        for child in class_body_node.children:
+            if child.type == "expression_statement":
+                for expr_child in child.children:
+                    if expr_child.type == "assignment":
+                        left = expr_child.child_by_field_name("left")
+                        right = expr_child.child_by_field_name("right")
+
+                        if left and right:
+                            left_text = self.parser.get_node_text(left, source_code)
+                            if left_text == "serializer_class":
+                                return self.parser.get_node_text(right, source_code)
+
+        return None
+
+    def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
+        """
+        Convert a Route to one or more Endpoint objects.
+
+        Overridden to handle serializer schemas.
+
+        Args:
+            route: Route object
+
+        Returns:
+            List of Endpoint objects (one per HTTP method)
+        """
+        endpoints = []
+
+        for method in route.methods:
+            # Parse path parameters
+            parameters = self._extract_path_parameters(route.raw_path)
+
+            # Get request body from metadata
+            request_body = route.metadata.get("request_body")
+
+            # Create response
+            response_schema = route.metadata.get("response_schema")
+            response_is_list = route.metadata.get("response_is_list", False)
+
+            # If response is a list, wrap schema in array
+            if response_is_list and response_schema:
+                response_schema = Schema(
+                    type="array",
+                    items=response_schema.model_dump(),
+                )
+
+            responses = [
+                Response(
+                    status_code="200",
+                    description="Success",
+                    response_schema=response_schema,
+                    content_type="application/json",
+                )
+            ]
+
+            endpoint = Endpoint(
+                path=self._normalize_path(route.raw_path),
+                method=method,
+                parameters=parameters,
+                request_body=request_body,
+                responses=responses,
+                tags=[self.framework.value],
+                operation_id=route.handler_name,
+                source_file=route.source_file,
+                source_line=route.source_line,
+            )
+
+            endpoints.append(endpoint)
+
+        return endpoints

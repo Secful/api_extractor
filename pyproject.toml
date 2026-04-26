@@ -33,6 +33,9 @@ dependencies = [
     "boto3>=1.28.0",
     "click>=8.1.0",
     "pyyaml>=6.0",
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic-settings>=2.1.0",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +46,12 @@ dev = [
     "flake8>=6.1.0",
     "mypy>=1.5.0",
     "moto>=4.2.0",  # For mocking boto3/S3
+    "httpx>=0.26.0",  # For testing FastAPI
+]
+server = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "pydantic-settings>=2.1.0",
 ]
 
 [project.scripts]

@@ -1,7 +1,7 @@
 """Flask framework extractor."""
 
 import re
-from typing import List, Optional, Dict, Set
+from typing import List, Optional, Dict, Set, Any
 from tree_sitter import Node
 
 from api_extractor.core.base_extractor import BaseExtractor
@@ -10,6 +10,10 @@ from api_extractor.core.models import (
     Parameter,
     HTTPMethod,
     FrameworkType,
+    Schema,
+    Endpoint,
+    Response,
+    ParameterLocation,
 )
 
 
@@ -49,6 +53,9 @@ class FlaskExtractor(BaseExtractor):
         tree = self.parser.parse_source(source_code, "python")
         if not tree:
             return routes
+
+        # Find Pydantic models (if any)
+        pydantic_models = self._find_pydantic_models(tree, source_code)
 
         # First pass: Find Blueprint definitions using query
         self._extract_blueprints_query(tree, source_code)
@@ -103,6 +110,12 @@ class FlaskExtractor(BaseExtractor):
 
                 location = self.parser.get_node_location(func_name_node)
 
+                # Extract function parameters for schemas
+                func_def_node = func_name_node.parent if func_name_node.parent else None
+                metadata = self._extract_function_metadata(
+                    func_def_node, source_code, pydantic_models
+                ) if func_def_node else {}
+
                 route = Route(
                     path=path,
                     methods=methods,
@@ -111,6 +124,7 @@ class FlaskExtractor(BaseExtractor):
                     raw_path=path,
                     source_file=file_path,
                     source_line=location["start_line"],
+                    metadata=metadata,
                 )
                 routes.append(route)
 
@@ -132,6 +146,12 @@ class FlaskExtractor(BaseExtractor):
 
                 location = self.parser.get_node_location(func_name_node)
 
+                # Extract function parameters for schemas
+                func_def_node = func_name_node.parent if func_name_node.parent else None
+                metadata = self._extract_function_metadata(
+                    func_def_node, source_code, pydantic_models
+                ) if func_def_node else {}
+
                 route = Route(
                     path=path,
                     methods=[http_method],
@@ -140,6 +160,7 @@ class FlaskExtractor(BaseExtractor):
                     raw_path=path,
                     source_file=file_path,
                     source_line=location["start_line"],
+                    metadata=metadata,
                 )
                 routes.append(route)
 
@@ -328,3 +349,257 @@ class FlaskExtractor(BaseExtractor):
         # Replace <type:param> or <param> with {param}
         normalized = re.sub(r"<(?:[^:>]+:)?([^>]+)>", r"{\1}", path)
         return normalized
+
+    def _find_pydantic_models(self, tree, source_code: bytes) -> Dict[str, Schema]:
+        """
+        Find all Pydantic BaseModel classes (Flask can use Pydantic!).
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary mapping model names to Schema objects
+        """
+        models = {}
+
+        # Query for classes inheriting from BaseModel
+        model_query = """
+        (class_definition
+          name: (identifier) @class_name
+          superclasses: (argument_list) @superclasses
+          body: (block) @class_body)
+        """
+
+        matches = self.parser.query(tree, model_query, "python")
+
+        for match in matches:
+            class_name_node = match.get("class_name")
+            superclasses_node = match.get("superclasses")
+            class_body_node = match.get("class_body")
+
+            if not all([class_name_node, superclasses_node, class_body_node]):
+                continue
+
+            # Check if BaseModel is in superclasses
+            superclasses_text = self.parser.get_node_text(superclasses_node, source_code)
+            if "BaseModel" not in superclasses_text:
+                continue
+
+            class_name = self.parser.get_node_text(class_name_node, source_code)
+
+            # Parse fields from class body (simplified version)
+            schema = self._parse_pydantic_class(class_body_node, source_code)
+            models[class_name] = schema
+
+        return models
+
+    def _parse_pydantic_class(self, class_body_node: Node, source_code: bytes) -> Schema:
+        """
+        Parse Pydantic model fields from class body.
+
+        Args:
+            class_body_node: Class body node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object
+        """
+        properties = {}
+        required = []
+
+        # Look for typed assignments
+        for child in class_body_node.children:
+            if child.type == "expression_statement":
+                for expr_child in child.children:
+                    if expr_child.type == "assignment":
+                        # name: type = default
+                        left = expr_child.child_by_field_name("left")
+                        type_node = expr_child.child_by_field_name("type")
+                        right = expr_child.child_by_field_name("right")
+
+                        if left and left.type == "identifier":
+                            field_name = self.parser.get_node_text(left, source_code)
+
+                            field_type = "string"  # default
+                            is_optional = False
+
+                            if type_node:
+                                type_text = self.parser.get_node_text(type_node, source_code)
+                                is_optional = "Optional" in type_text
+                                field_type = self._map_python_type(type_text)
+
+                            has_default = right is not None
+                            is_required = not is_optional and not has_default
+
+                            properties[field_name] = {"type": field_type}
+                            if is_required:
+                                required.append(field_name)
+
+        return Schema(
+            type="object",
+            properties=properties,
+            required=required,
+        )
+
+    def _map_python_type(self, type_text: str) -> str:
+        """Map Python type to OpenAPI type."""
+        # Check for List first before checking for contained types
+        if "list" in type_text.lower() or "List" in type_text:
+            return "array"
+        elif "str" in type_text:
+            return "string"
+        elif "int" in type_text:
+            return "integer"
+        elif "float" in type_text:
+            return "number"
+        elif "bool" in type_text:
+            return "boolean"
+        else:
+            return "string"
+
+    def _extract_function_metadata(
+        self, func_def_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema]
+    ) -> Dict[str, Any]:
+        """
+        Extract metadata from function definition.
+
+        Args:
+            func_def_node: Function definition node
+            source_code: Source code bytes
+            pydantic_models: Dictionary of Pydantic models
+
+        Returns:
+            Metadata dictionary
+        """
+        metadata = {}
+
+        # Get parameters node
+        params_node = func_def_node.child_by_field_name("parameters")
+        if params_node:
+            # Check for Pydantic model parameters
+            for param in params_node.children:
+                if param.type in ("typed_parameter", "typed_default_parameter"):
+                    # Get parameter type
+                    name_node = None
+                    type_node = None
+
+                    for child in param.children:
+                        if child.type == "identifier" and not name_node:
+                            name_node = child
+                        elif child.type == "type":
+                            type_node = child
+
+                    if type_node:
+                        type_text = self.parser.get_node_text(type_node, source_code)
+                        # Check if type is a Pydantic model
+                        if type_text in pydantic_models:
+                            metadata["request_body"] = pydantic_models[type_text]
+                            break
+
+        # Extract query parameters from function body (request.args.get calls)
+        func_body = func_def_node.child_by_field_name("body")
+        if func_body:
+            query_params = self._extract_query_params_from_body(func_body, source_code)
+            if query_params:
+                metadata["query_params"] = query_params
+
+        return metadata
+
+    def _extract_query_params_from_body(
+        self, body_node: Node, source_code: bytes
+    ) -> List[Parameter]:
+        """
+        Extract query parameters from request.args.get() calls in function body.
+
+        Args:
+            body_node: Function body node
+            source_code: Source code bytes
+
+        Returns:
+            List of Parameter objects
+        """
+        params = []
+        seen_params = set()
+
+        # Recursively search for request.args.get() calls
+        def search_args_get(node):
+            if node.type == "call":
+                # Check if it's request.args.get(...)
+                func = node.child_by_field_name("function")
+                if func and func.type == "attribute":
+                    func_text = self.parser.get_node_text(func, source_code)
+                    if "request.args.get" in func_text:
+                        # Extract parameter name from first argument
+                        args = node.child_by_field_name("arguments")
+                        if args:
+                            for child in args.children:
+                                if child.type == "string":
+                                    param_name = self.parser.extract_string_value(child, source_code)
+                                    if param_name and param_name not in seen_params:
+                                        seen_params.add(param_name)
+                                        params.append(
+                                            Parameter(
+                                                name=param_name,
+                                                location=ParameterLocation.QUERY,
+                                                type="string",
+                                                required=False,
+                                            )
+                                        )
+                                    break
+
+            for child in node.children:
+                search_args_get(child)
+
+        search_args_get(body_node)
+        return params
+
+    def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
+        """
+        Convert a Route to one or more Endpoint objects.
+
+        Overridden to handle Pydantic models and query params.
+
+        Args:
+            route: Route object
+
+        Returns:
+            List of Endpoint objects (one per HTTP method)
+        """
+        endpoints = []
+
+        for method in route.methods:
+            # Parse path parameters
+            parameters = self._extract_path_parameters(route.raw_path)
+
+            # Add query parameters from metadata
+            if "query_params" in route.metadata:
+                parameters.extend(route.metadata["query_params"])
+
+            # Get request body from metadata
+            request_body = route.metadata.get("request_body")
+
+            # Create default response
+            responses = [
+                Response(
+                    status_code="200",
+                    description="Success",
+                    content_type="application/json",
+                )
+            ]
+
+            endpoint = Endpoint(
+                path=self._normalize_path(route.raw_path),
+                method=method,
+                parameters=parameters,
+                request_body=request_body,
+                responses=responses,
+                tags=[self.framework.value],
+                operation_id=route.handler_name,
+                source_file=route.source_file,
+                source_line=route.source_line,
+            )
+
+            endpoints.append(endpoint)
+
+        return endpoints

@@ -186,13 +186,26 @@ class OpenAPIBuilder:
         )
 
         if schema.properties:
-            openapi_schema.properties = {
-                name: self._schema_to_openapi(prop) if isinstance(prop, Schema) else SchemaObject(**prop)
-                for name, prop in schema.properties.items()
-            }
+            openapi_schema.properties = {}
+            for name, prop in schema.properties.items():
+                if isinstance(prop, Schema):
+                    openapi_schema.properties[name] = self._schema_to_openapi(prop)
+                elif isinstance(prop, dict):
+                    # Create SchemaObject from dict, only including non-None/non-empty values
+                    cleaned_prop = {k: v for k, v in prop.items() if v not in (None, [], {})}
+                    openapi_schema.properties[name] = SchemaObject(**cleaned_prop)
+                else:
+                    openapi_schema.properties[name] = prop
 
         if schema.required:
             openapi_schema.required = schema.required
+
+        if schema.items:
+            # Handle array items schema
+            if isinstance(schema.items, Schema):
+                openapi_schema.items = self._schema_to_openapi(schema.items)
+            elif isinstance(schema.items, dict):
+                openapi_schema.items = SchemaObject(**schema.items)
 
         return openapi_schema
 
