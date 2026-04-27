@@ -44,6 +44,10 @@ class GinExtractor(BaseExtractor):
         """
         routes = []
 
+        # Skip test files (files ending with _test.go)
+        if file_path.endswith('_test.go'):
+            return routes
+
         # Read file content
         source_code = self._read_file(file_path)
         if not source_code:
