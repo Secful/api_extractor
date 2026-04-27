@@ -48,6 +48,14 @@ htmlcov/
 *.log
 *.tmp
 tmp/
+
+# Test output files (generated OpenAPI specs during testing)
+openapi.json
+openapi.yaml
+*-openapi.json
+*-openapi.yaml
+spring-boot-*.json
+spring-boot-*.yaml
 temp/
 
 # Build artifacts
