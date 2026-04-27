@@ -16,3 +16,6 @@
 [submodule "tests/fixtures/real-world/nestjs-realworld"]
 	path = tests/fixtures/real-world/nestjs-realworld
 	url = https://github.com/lujakob/nestjs-realworld-example-app.git
+[submodule "tests/fixtures/real-world/golang-gin-realworld-example-app"]
+	path = tests/fixtures/real-world/golang-gin-realworld-example-app
+	url = https://github.com/gothinkster/golang-gin-realworld-example-app.git
