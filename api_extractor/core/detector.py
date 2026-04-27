@@ -44,6 +44,13 @@ class FrameworkDetector:
         ],
     }
 
+    # Go dependency patterns
+    GO_FRAMEWORK_PATTERNS = {
+        FrameworkType.GIN: [
+            "github.com/gin-gonic/gin",
+        ],
+    }
+
     # Python import patterns
     PYTHON_IMPORT_PATTERNS = {
         FrameworkType.FASTAPI: [
@@ -96,6 +103,14 @@ class FrameworkDetector:
         FrameworkType.ASPNET_CORE: [
             r"using\s+Microsoft\.AspNetCore\.Mvc",
             r"using\s+Microsoft\.AspNetCore\.Builder",
+        ],
+    }
+
+    # Go import patterns
+    GO_IMPORT_PATTERNS = {
+        FrameworkType.GIN: [
+            r'import\s+.*"github\.com/gin-gonic/gin"',
+            r'"github\.com/gin-gonic/gin"',
         ],
     }
 
@@ -158,6 +173,9 @@ class FrameworkDetector:
 
         # Check C# dependencies
         frameworks.update(self._check_csharp_dependencies(path))
+
+        # Check Go dependencies
+        frameworks.update(self._check_go_dependencies(path))
 
         return frameworks
 
@@ -310,6 +328,29 @@ class FrameworkDetector:
 
         return frameworks
 
+    def _check_go_dependencies(self, path: str) -> Set[FrameworkType]:
+        """Check Go module files (go.mod) for Gin references."""
+        frameworks: Set[FrameworkType] = set()
+
+        for root, _, files in os.walk(path):
+            if any(skip in root for skip in [".git", "node_modules", "vendor"]):
+                continue
+
+            for file in files:
+                if file == "go.mod":
+                    go_mod_file = os.path.join(root, file)
+                    try:
+                        with open(go_mod_file, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            for framework, patterns in self.GO_FRAMEWORK_PATTERNS.items():
+                                if any(pattern in content for pattern in patterns):
+                                    frameworks.add(framework)
+                                    return frameworks
+                    except Exception:
+                        pass
+
+        return frameworks
+
     def _check_structure(self, path: str) -> Set[FrameworkType]:
         """
         Check directory structure for framework-specific patterns.
@@ -356,6 +397,9 @@ class FrameworkDetector:
 
         # Scan C# files
         frameworks.update(self._scan_csharp_imports(path))
+
+        # Scan Go files
+        frameworks.update(self._scan_go_imports(path))
 
         return frameworks
 
@@ -466,6 +510,30 @@ class FrameworkDetector:
                         with open(file_path, "r", encoding="utf-8") as f:
                             content = f.read()
                             for framework, patterns in self.CSHARP_IMPORT_PATTERNS.items():
+                                if any(re.search(pattern, content) for pattern in patterns):
+                                    frameworks.add(framework)
+                                    if frameworks:
+                                        return frameworks
+                    except Exception:
+                        continue
+
+        return frameworks
+
+    def _scan_go_imports(self, path: str) -> Set[FrameworkType]:
+        """Scan Go files for import statements."""
+        frameworks: Set[FrameworkType] = set()
+
+        for root, _, files in os.walk(path):
+            if any(skip in root for skip in [".git", "node_modules", "vendor"]):
+                continue
+
+            for file in files:
+                if file.endswith(".go"):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            for framework, patterns in self.GO_IMPORT_PATTERNS.items():
                                 if any(re.search(pattern, content) for pattern in patterns):
                                     frameworks.add(framework)
                                     if frameworks:

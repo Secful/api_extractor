@@ -51,6 +51,9 @@ def get_extractor(framework: FrameworkType):
     elif framework == FrameworkType.ASPNET_CORE:
         from api_extractor.extractors.csharp.aspnet_core import ASPNETCoreExtractor
         return ASPNETCoreExtractor()
+    elif framework == FrameworkType.GIN:
+        from api_extractor.extractors.go.gin import GinExtractor
+        return GinExtractor()
     else:
         return None
 

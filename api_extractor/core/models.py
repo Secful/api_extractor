@@ -17,6 +17,7 @@ class FrameworkType(str, Enum):
     SPRING_BOOT = "spring_boot"
     NEXTJS = "nextjs"
     ASPNET_CORE = "aspnet_core"
+    GIN = "gin"
 
 
 class ParameterLocation(str, Enum):

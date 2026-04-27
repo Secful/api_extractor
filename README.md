@@ -59,6 +59,20 @@ Show detailed extraction progress:
 api-extractor extract /path/to/project --verbose
 ```
 
+### Framework-Specific Examples
+
+Extract from a Go Gin project:
+
+```bash
+api-extractor extract /path/to/gin/project -o openapi.json
+```
+
+Extract from a Next.js project:
+
+```bash
+api-extractor extract /path/to/nextjs/project -o openapi.yaml --format yaml
+```
+
 ## CLI Reference
 
 ### Command: `extract`
@@ -87,7 +101,7 @@ api-extractor extract <PATH> [OPTIONS]
 
 ## Supported Frameworks
 
-API Extractor supports **9 major web frameworks** across 4 languages, automatically detected via dependency files, imports, and code patterns.
+API Extractor supports **10 major web frameworks** across 5 languages, automatically detected via dependency files, imports, and code patterns.
 
 ### Python Frameworks
 
@@ -147,6 +161,19 @@ API Extractor supports **9 major web frameworks** across 4 languages, automatica
 - Path constraint normalization (`{id:int}` → `{id}`)
 - DTO and model extraction
 - Maven and Gradle project support
+
+### Go Frameworks
+
+| Framework | Version | Detection Method | Real-World Tested |
+|-----------|---------|------------------|-------------------|
+| **Gin** | 1.x | `go.mod`, imports | ✅ Gin RealWorld |
+
+**Key Features:**
+- Router method detection (`router.GET()`, `router.POST()`, etc.)
+- RouterGroup path composition
+- Path parameter normalization (`:param` → `{param}`)
+- Handler function tracking
+- Go module detection
 
 ### Framework-Specific Details
 
@@ -226,6 +253,31 @@ public class UserController {
 
 **Detection:** `pom.xml`/`build.gradle` dependencies, imports, `@RestController` annotations
 **Validated on:** Spring Boot RealWorld (12 paths, 19 endpoints)
+
+#### Gin (Go)
+
+Supports Gin web framework with function-based routing:
+
+```go
+package main
+
+import "github.com/gin-gonic/gin"
+
+func ArticlesRegister(router *gin.RouterGroup) {
+    router.GET("/feed", ArticleFeed)
+    router.GET("/:slug", ArticleRetrieve)
+    router.POST("", ArticleCreate)
+    router.PUT("/:slug", ArticleUpdate)
+    router.DELETE("/:slug", ArticleDelete)
+}
+
+func ArticleFeed(c *gin.Context) {
+    // Handler implementation
+}
+```
+
+**Detection:** `go.mod` dependencies, imports (`github.com/gin-gonic/gin`)
+**Validated on:** Gin RealWorld (25-30 endpoints)
 
 #### ASP.NET Core
 

@@ -8,6 +8,7 @@ import tree_sitter_javascript as tsjavascript
 import tree_sitter_typescript as tstypescript
 import tree_sitter_java as tsjava
 import tree_sitter_c_sharp as tscsharp
+import tree_sitter_go as tsgo
 from tree_sitter import Language, Parser, Node, Tree
 
 
@@ -43,6 +44,7 @@ class LanguageParser:
         ".tsx": "tsx",
         ".java": "java",
         ".cs": "csharp",
+        ".go": "go",
     }
 
     def __init__(self) -> None:
@@ -69,6 +71,9 @@ class LanguageParser:
 
         if "csharp" not in self._languages:
             self._languages["csharp"] = Language(tscsharp.language())
+
+        if "go" not in self._languages:
+            self._languages["go"] = Language(tsgo.language())
 
     def detect_language(self, file_path: str) -> Optional[str]:
         """
