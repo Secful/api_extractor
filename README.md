@@ -5,11 +5,11 @@ Automatically extract REST API definitions from source code and generate OpenAPI
 ## Features
 
 - **Automatic Framework Detection**: Detects web frameworks in your codebase
-- **Multi-Language Support**: Supports Python (FastAPI, Flask, Django REST), JavaScript/TypeScript (Express, NestJS, Fastify, Next.js), and Java (Spring Boot)
+- **Multi-Language Support**: Supports Python (FastAPI, Flask, Django REST), JavaScript/TypeScript (Express, NestJS, Fastify, Next.js), Java (Spring Boot), C# (ASP.NET Core), and Go (Gin)
 - **OpenAPI 3.1 Output**: Generates standard OpenAPI specifications in JSON or YAML
 - **S3 Support**: Can analyze code from S3 buckets
 - **Tree-sitter Based**: Uses Tree-sitter Query Language for accurate AST parsing and pattern matching
-- **Production Validated**: Tested against real-world projects including Cal.com (Next.js), Dub (Next.js), Spring Boot RealWorld, truthy (NestJS), and Postman tutorial patterns
+- **Production Validated**: Tested against real-world projects including Cal.com (Next.js), Dub (Next.js), Spring Boot RealWorld, ASP.NET Core RealWorld, Gin RealWorld, truthy (NestJS), and Postman tutorial patterns
 - **Comprehensive Coverage**: Extracts paths, methods, parameters, request bodies, and type information
 
 ## Installation
