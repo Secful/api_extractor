@@ -68,3 +68,7 @@ temp/
 
 # OS files
 Thumbs.db
+
+# Real-world test fixtures (large repositories, clone on demand)
+tests/fixtures/real-world/cal.com/
+tests/fixtures/real-world/dub/

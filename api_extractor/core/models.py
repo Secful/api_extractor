@@ -15,6 +15,7 @@ class FrameworkType(str, Enum):
     NESTJS = "nestjs"
     FASTIFY = "fastify"
     SPRING_BOOT = "spring_boot"
+    NEXTJS = "nextjs"
 
 
 class ParameterLocation(str, Enum):

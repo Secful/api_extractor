@@ -45,6 +45,9 @@ def get_extractor(framework: FrameworkType):
     elif framework == FrameworkType.SPRING_BOOT:
         from api_extractor.extractors.java.spring_boot import SpringBootExtractor
         return SpringBootExtractor()
+    elif framework == FrameworkType.NEXTJS:
+        from api_extractor.extractors.javascript.nextjs import NextJSExtractor
+        return NextJSExtractor()
     else:
         return None
 

@@ -23,6 +23,7 @@ class FrameworkDetector:
         FrameworkType.EXPRESS: ["express"],
         FrameworkType.NESTJS: ["@nestjs/core", "@nestjs/common"],
         FrameworkType.FASTIFY: ["fastify"],
+        FrameworkType.NEXTJS: ["next"],
     }
 
     # Java dependency patterns
@@ -66,6 +67,11 @@ class FrameworkDetector:
             r"from\s+['\"]fastify['\"]",
             r"import\s+.*\s+from\s+['\"]fastify['\"]",
         ],
+        FrameworkType.NEXTJS: [
+            r"from\s+['\"]next/server['\"]",
+            r"from\s+['\"]next/router['\"]",
+            r"from\s+['\"]next/navigation['\"]",
+        ],
     }
 
     # Java import patterns
@@ -94,6 +100,9 @@ class FrameworkDetector:
 
         # Level 1: Check dependency files (fast, high confidence)
         frameworks.update(self._check_dependencies(path))
+
+        # Level 1.5: Check directory structure (fast, high confidence for Next.js)
+        frameworks.update(self._check_structure(path))
 
         # Level 2: Scan imports (medium speed, high confidence)
         if not frameworks:
@@ -248,6 +257,29 @@ class FrameworkDetector:
                             frameworks.add(framework)
             except Exception:
                 pass
+
+        return frameworks
+
+    def _check_structure(self, path: str) -> Set[FrameworkType]:
+        """
+        Check directory structure for framework-specific patterns.
+
+        Args:
+            path: Path to codebase
+
+        Returns:
+            Set of detected frameworks
+        """
+        frameworks: Set[FrameworkType] = set()
+
+        # Check for Next.js API routes structure
+        # App Router: app/api/ directory
+        if os.path.exists(os.path.join(path, "app", "api")):
+            frameworks.add(FrameworkType.NEXTJS)
+
+        # Pages Router: pages/api/ directory
+        if os.path.exists(os.path.join(path, "pages", "api")):
+            frameworks.add(FrameworkType.NEXTJS)
 
         return frameworks
 

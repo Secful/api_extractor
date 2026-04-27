@@ -75,6 +75,66 @@ Real-world fixtures ensure that extractors work correctly with production-qualit
 - User profiles
 - Tags
 
+#### 4. Cal.com (`cal.com`)
+- **Repository**: https://github.com/calcom/cal.com
+- **Description**: Production calendar scheduling platform with Next.js API routes
+- **Framework Version**: Next.js 14+ (App Router & Pages Router)
+- **Application Type**: Enterprise calendar and scheduling platform
+- **Key Features**:
+  - Both App Router and Pages Router patterns
+  - OAuth integrations
+  - Webhook handling
+  - Payment processing (Stripe)
+  - CSRF protection
+
+**Expected Endpoints** (11+ detected):
+- `GET /api/csrf` - CSRF token endpoint
+- `GET /api/ip` - IP detection
+- `GET /api/stripe/webhook` - Stripe webhook handler
+- `GET /api/video/recording` - Video recording endpoint
+- `GET /api/integrations/stripepayment/webhook` - Payment webhook
+
+**Clone Command**:
+```bash
+git clone --depth 1 https://github.com/calcom/cal.com.git tests/fixtures/real-world/cal.com
+```
+
+#### 5. Dub (`dub`)
+- **Repository**: https://github.com/dubinc/dub
+- **Description**: Production link management platform built with Next.js App Router
+- **Framework Version**: Next.js 14+ (primarily App Router)
+- **Application Type**: Link shortening and analytics SaaS platform
+- **Key Features**:
+  - App Router architecture (route.ts files)
+  - Link management API
+  - Analytics endpoints
+  - OAuth 2.0 integration
+  - AI embeddings
+  - Webhook callbacks
+
+**Expected Endpoints** (31+ detected):
+- `GET /api` - API root
+- `POST /api/ai/sync-embeddings` - AI embeddings sync
+- `GET /api/analytics/dashboard` - Analytics data
+- `POST /api/auth/reset-password` - Password reset
+- `GET /api/callback/bitly` - OAuth callback
+- `GET /api/links/exists` - Link existence check
+- `GET /api/links/metatags` - Link metadata
+- `POST /api/oauth/token` - OAuth token endpoint
+- `GET /api/qr` - QR code generation
+
+**Clone Command**:
+```bash
+git clone --depth 1 https://github.com/dubinc/dub.git tests/fixtures/real-world/dub
+```
+
+**Note**: These repositories are large and are added to `.gitignore`. Clone them locally for testing:
+```bash
+cd tests/fixtures/real-world
+git clone --depth 1 https://github.com/calcom/cal.com.git
+git clone --depth 1 https://github.com/dubinc/dub.git
+```
+
 ### Python Frameworks
 
 #### 4. FastAPI Full Stack (`fastapi-fullstack`)
@@ -177,13 +237,22 @@ pytest tests/integration/
 
 ### Specific Framework Tests
 
+Each framework has its own standalone real-world test file:
+
 ```bash
-pytest tests/integration/test_realworld_fastify.py
-pytest tests/integration/test_realworld_fastapi.py
-pytest tests/integration/test_realworld_django.py
-pytest tests/integration/test_realworld_flask.py
-pytest tests/integration/test_realworld_express.py
-pytest tests/integration/test_realworld_nestjs.py
+# JavaScript/TypeScript frameworks
+pytest tests/integration/test_realworld_express.py -v
+pytest tests/integration/test_realworld_fastify.py -v
+pytest tests/integration/test_realworld_nestjs.py -v
+pytest tests/integration/test_realworld_nextjs.py -v
+
+# Python frameworks
+pytest tests/integration/test_realworld_fastapi.py -v
+pytest tests/integration/test_realworld_flask.py -v
+pytest tests/integration/test_realworld_django.py -v
+
+# Java frameworks
+pytest tests/integration/test_realworld_spring_boot.py -v
 ```
 
 ### With Coverage
