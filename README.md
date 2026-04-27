@@ -103,6 +103,23 @@ api-extractor extract <PATH> [OPTIONS]
 
 API Extractor supports **10 major web frameworks** across 5 languages, automatically detected via dependency files, imports, and code patterns.
 
+## Docker Image Extraction Requirements
+
+When extracting API definitions from Docker images, different languages require different preprocessing steps:
+
+| Language | Frameworks | Preprocessing Required | Tools/Notes |
+|----------|-----------|------------------------|-------------|
+| **Python** | FastAPI, Flask, Django REST | ✅ None | Python source files (.py) are deployed as-is in Docker images |
+| **JavaScript/TypeScript** | Express, NestJS, Fastify, Next.js | ⚠️ Varies | **Development images**: Source available as-is<br>**Production images**: May be transpiled/minified - source maps needed for TS, Next.js apps may be optimized/bundled |
+| **Java** | Spring Boot | ❌ Decompilation | .class files → .java source<br>Extract JAR/WAR first, then decompile with JD-CLI, fernflower, or Procyon |
+| **C#** | ASP.NET Core | ❌ Decompilation | .dll files → .cs source<br>Decompile IL/MSIL using ILSpy, dotPeek, or dnSpy |
+| **Go** | Gin | ❌ Very Difficult | Compiled to native binary - specialized Go decompilers required (limited availability)<br>Source code typically not in image |
+
+**Legend:**
+- ✅ **None** - Extract and analyze source files directly
+- ⚠️ **Varies** - Depends on build configuration (development vs production)
+- ❌ **Decompilation** - Requires decompiling bytecode/binaries back to source
+
 ### Python Frameworks
 
 | Framework | Version | Detection Method | Real-World Tested |
