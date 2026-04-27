@@ -456,13 +456,19 @@ None currently supported for CLI mode. All configuration is via CLI arguments.
 
 ---
 
-## HTTP Server Mode
+## HTTP Server Mode (Sidecar Deployment)
 
-API Extractor can run as an HTTP server, exposing REST API endpoints for on-demand code analysis. This mode is ideal for:
-- Integration with other services requiring runtime API discovery
-- Web-based UIs and dashboards for API analysis
-- Deployment as a microservice/sidecar in containerized environments
-- Programmatic access to extraction capabilities
+API Extractor can run as an HTTP server, exposing REST API endpoints for on-demand code analysis. This mode is designed for **sidecar deployment** in containerized environments, where API Extractor runs alongside your application to provide real-time API documentation and analysis capabilities.
+
+### Use Cases
+
+- **Runtime API Discovery**: Automatically discover and document APIs running in your cluster
+- **CI/CD Integration**: Extract API specs during build/deploy pipelines
+- **API Gateway Integration**: Provide OpenAPI specs to API gateways for routing and validation
+- **Documentation Automation**: Generate up-to-date API documentation on every deployment
+- **Service Mesh Integration**: Supply API metadata to service mesh control planes
+- **Contract Testing**: Generate API contracts for consumer-driven contract testing
+- **Web-based UIs**: Power interactive API exploration dashboards
 
 ### Starting the Server
 
@@ -480,6 +486,112 @@ api-extractor serve --host 127.0.0.1 --port 9000
 **Development mode with auto-reload:**
 ```bash
 api-extractor serve --reload --log-level debug
+```
+
+### Sidecar Deployment Pattern
+
+The most common deployment pattern for API Extractor is as a **sidecar container** that runs alongside your application in a Kubernetes pod or Docker Compose stack. This allows other services to discover and document your API at runtime without modifying your application code.
+
+**Benefits of Sidecar Deployment:**
+
+1. **Zero Application Changes**: No instrumentation or code changes required in your application
+2. **Real-Time Analysis**: Generate OpenAPI specs on-demand when services start or change
+3. **Multi-Language Support**: Works with any supported framework across Python, JavaScript/TypeScript, Java, C#, Go
+4. **Shared Volume Access**: Sidecar reads application code from a shared volume
+5. **Network Isolation**: API Extractor is accessible only within the pod/stack (not exposed externally)
+6. **Independent Scaling**: Can be scaled independently of the application
+
+**Architecture:**
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  Kubernetes Pod / Docker Compose Stack                     │
+│                                                             │
+│  ┌─────────────────┐       ┌─────────────────────────┐   │
+│  │  Application    │       │  API Extractor          │   │
+│  │  Container      │       │  (Sidecar)              │   │
+│  │                 │       │                         │   │
+│  │  :8080 (app)    │       │  :8000 (analysis API)   │   │
+│  │                 │       │                         │   │
+│  └────────┬────────┘       └──────────┬──────────────┘   │
+│           │                           │                   │
+│           └──────┬────────────────────┘                   │
+│                  │                                         │
+│         ┌────────▼────────┐                               │
+│         │ Shared Volume   │                               │
+│         │ /app/code       │                               │
+│         │ (Application    │                               │
+│         │  Source Code)   │                               │
+│         └─────────────────┘                               │
+└────────────────────────────────────────────────────────────┘
+                      │
+                      │ External Request
+                      ▼
+            Other services call
+            http://pod-ip:8000/api/v1/analyze
+            to get OpenAPI spec
+```
+
+**Example: Docker Compose Sidecar Setup**
+
+```yaml
+version: '3.8'
+
+services:
+  # Your application
+  app:
+    image: my-app:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./app-code:/app/code:ro
+    networks:
+      - app-network
+
+  # API Extractor sidecar
+  api-extractor:
+    image: api-extractor:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app-code:/app/code:ro
+    environment:
+      - API_EXTRACTOR_ALLOWED_PATH_PREFIXES=/app/code
+      - API_EXTRACTOR_LOG_LEVEL=info
+    networks:
+      - app-network
+    depends_on:
+      - app
+
+  # Example: API Gateway that uses the OpenAPI spec
+  api-gateway:
+    image: kong:latest
+    ports:
+      - "8001:8001"
+    environment:
+      - GATEWAY_API_SPEC_URL=http://api-extractor:8000/api/v1/analyze
+    networks:
+      - app-network
+    depends_on:
+      - api-extractor
+
+networks:
+  app-network:
+    driver: bridge
+```
+
+**Access the API Extractor from other services:**
+
+```bash
+# From another container in the same network
+curl -X POST http://api-extractor:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/app/code"}'
+
+# From the host machine
+curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/app/code"}'
 ```
 
 ### API Endpoints
@@ -515,30 +627,41 @@ Get information about service capabilities and supported frameworks.
 }
 ```
 
-#### Analyze Codebase
+#### Analyze Codebase - Core Endpoint
 **POST** `/api/v1/analyze`
 
-Extract REST API definitions from source code and generate OpenAPI specification.
+The primary endpoint for extracting REST API definitions from source code and generating OpenAPI specifications. This endpoint performs automatic framework detection, AST parsing, route extraction, and OpenAPI spec generation in a single request.
+
+**Key Features:**
+- **Automatic Framework Detection**: Detects Python (FastAPI, Flask, Django REST), JavaScript/TypeScript (Express, NestJS, Fastify, Next.js), Java (Spring Boot), C# (ASP.NET Core), and Go (Gin)
+- **Multi-Framework Support**: Handles codebases with multiple frameworks
+- **OpenAPI 3.1 Output**: Returns standard-compliant OpenAPI specifications
+- **Local & S3 Sources**: Analyzes code from local filesystem or S3 buckets
+- **Rich Metadata**: Provides extraction statistics, detected frameworks, warnings, and errors
+- **Path Security**: Validates paths to prevent directory traversal and unauthorized access
 
 **Request Body:**
 ```json
 {
-  "path": "/path/to/code",
+  "path": "/app/code",
   "s3": false,
   "title": "My API",
   "version": "1.0.0",
-  "description": "API description"
+  "description": "My REST API Documentation"
 }
 ```
 
-**Parameters:**
-- `path` (required): Path to codebase (local directory or S3 URI)
-- `s3` (optional, default: false): Whether path is an S3 URI
-- `title` (optional, default: "Extracted API"): API title for OpenAPI spec
-- `version` (optional, default: "1.0.0"): API version for OpenAPI spec
-- `description` (optional): API description for OpenAPI spec
+**Request Parameters:**
 
-**Success Response (200):**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `path` | string | Yes | - | Path to codebase (local directory or S3 URI like `s3://bucket/prefix/`) |
+| `s3` | boolean | No | `false` | Whether path is an S3 URI. Set to `true` when analyzing from S3 |
+| `title` | string | No | `"Extracted API"` | API title that appears in the OpenAPI `info.title` field |
+| `version` | string | No | `"1.0.0"` | API version that appears in the OpenAPI `info.version` field |
+| `description` | string | No | `null` | API description that appears in the OpenAPI `info.description` field |
+
+**Success Response (200 OK):**
 ```json
 {
   "success": true,
@@ -546,28 +669,132 @@ Extract REST API definitions from source code and generate OpenAPI specification
     "openapi": "3.1.0",
     "info": {
       "title": "My API",
-      "version": "1.0.0"
+      "version": "1.0.0",
+      "description": "My REST API Documentation"
     },
-    "paths": { ... }
+    "paths": {
+      "/api/users": {
+        "get": {
+          "tags": ["fastapi"],
+          "operationId": "get_users",
+          "responses": {
+            "200": {"description": "Success"}
+          }
+        }
+      },
+      "/api/users/{user_id}": {
+        "get": {
+          "tags": ["fastapi"],
+          "operationId": "get_user",
+          "parameters": [
+            {
+              "name": "user_id",
+              "in": "path",
+              "required": true,
+              "schema": {"type": "integer"}
+            }
+          ],
+          "responses": {
+            "200": {"description": "Success"}
+          }
+        }
+      }
+    }
   },
   "endpoints_count": 5,
   "frameworks_detected": ["fastapi"],
   "errors": [],
-  "warnings": [],
+  "warnings": ["No type hints found for parameter 'query' in function 'search_users'"],
   "metadata": {
-    "source_path": "/path/to/code",
+    "source_path": "/app/code",
     "is_s3": false,
-    "frameworks_used": ["fastapi"]
+    "frameworks_used": ["fastapi"],
+    "total_files_scanned": 12,
+    "extraction_time_ms": 234
   }
 }
 ```
 
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | boolean | Whether extraction completed successfully (true even if no endpoints found) |
+| `openapi_spec` | object \| null | Complete OpenAPI 3.1.0 specification, or `null` if extraction failed |
+| `endpoints_count` | integer | Total number of API endpoints discovered |
+| `frameworks_detected` | array[string] | List of detected frameworks (e.g., `["fastapi", "flask"]`) |
+| `errors` | array[string] | Critical errors that prevented extraction |
+| `warnings` | array[string] | Non-critical issues (missing types, ambiguous routes, etc.) |
+| `metadata` | object | Additional extraction metadata (source path, frameworks used, statistics) |
+
 **Error Responses:**
-- `400 Bad Request` - Invalid request (bad path, invalid framework)
-- `403 Forbidden` - Forbidden path (security violation)
-- `404 Not Found` - Path not found
-- `422 Validation Error` - Request validation failed
-- `500 Internal Server Error` - Server error
+
+| Status Code | Description | Example |
+|-------------|-------------|---------|
+| **400 Bad Request** | Invalid request parameters | Path is empty, invalid S3 URI format |
+| **403 Forbidden** | Path security violation | Path contains `..`, targets system directories, or violates whitelist |
+| **404 Not Found** | Path does not exist (local only) | Directory not found at specified path |
+| **422 Validation Error** | Request schema validation failed | Missing required field, wrong type |
+| **500 Internal Server Error** | Unexpected server error | Parser crash, unexpected exception |
+
+**Example Error Response (403 Forbidden):**
+```json
+{
+  "detail": "Access denied: path '/etc/passwd' is forbidden"
+}
+```
+
+**Sidecar Deployment Example:**
+
+In a Kubernetes sidecar deployment, the API Extractor container runs alongside your application container and analyzes the application's source code:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  template:
+    spec:
+      containers:
+      # Main application container
+      - name: app
+        image: my-app:latest
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: app-code
+          mountPath: /app/code
+          readOnly: true
+
+      # API Extractor sidecar
+      - name: api-extractor
+        image: api-extractor:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: API_EXTRACTOR_ALLOWED_PATH_PREFIXES
+          value: "/app/code"
+        volumeMounts:
+        - name: app-code
+          mountPath: /app/code
+          readOnly: true
+
+      volumes:
+      - name: app-code
+        emptyDir: {}
+```
+
+**Analyze the application from another service:**
+```bash
+curl -X POST http://my-app:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "path": "/app/code",
+    "title": "My App API",
+    "version": "1.0.0"
+  }'
+```
 
 ### API Documentation
 
@@ -609,6 +836,215 @@ result = response.json()
 if result["success"]:
     print(f"Found {result['endpoints_count']} endpoints")
     print(result["openapi_spec"])
+```
+
+### Real-World Integration Examples
+
+#### Example 1: API Gateway Auto-Configuration
+
+Use API Extractor in a sidecar to automatically configure an API gateway on application startup:
+
+```python
+# api-gateway-config.py - Runs in init container or startup script
+import requests
+import json
+
+# Get OpenAPI spec from API Extractor sidecar
+response = requests.post(
+    "http://api-extractor:8000/api/v1/analyze",
+    json={
+        "path": "/app/code",
+        "title": "User Service API",
+        "version": "1.0.0"
+    }
+)
+
+spec = response.json()
+
+if spec["success"]:
+    # Configure API Gateway with the OpenAPI spec
+    # Example: Kong, AWS API Gateway, or any gateway that accepts OpenAPI
+    gateway_response = requests.post(
+        "http://api-gateway:8001/services",
+        json={
+            "name": "user-service",
+            "openapi_spec": spec["openapi_spec"]
+        }
+    )
+
+    print(f"✓ Configured gateway with {spec['endpoints_count']} endpoints")
+    print(f"✓ Frameworks detected: {spec['frameworks_detected']}")
+else:
+    print(f"✗ Extraction failed: {spec['errors']}")
+    exit(1)
+```
+
+#### Example 2: Service Mesh Registration
+
+Register service endpoints with a service mesh control plane:
+
+```python
+# service-mesh-register.py
+import requests
+import yaml
+
+# Extract OpenAPI spec
+response = requests.post(
+    "http://api-extractor:8000/api/v1/analyze",
+    json={"path": "/app/code"}
+)
+
+spec = response.json()
+
+if spec["success"]:
+    openapi = spec["openapi_spec"]
+
+    # Register each endpoint with the service mesh
+    for path, methods in openapi["paths"].items():
+        for method, details in methods.items():
+            route_config = {
+                "service": "user-service",
+                "path": path,
+                "method": method.upper(),
+                "tags": details.get("tags", [])
+            }
+
+            requests.post(
+                "http://service-mesh-control-plane:9090/routes",
+                json=route_config
+            )
+
+    print(f"✓ Registered {spec['endpoints_count']} routes with service mesh")
+```
+
+#### Example 3: Continuous Documentation Updates
+
+Automatically update API documentation in a docs site on every deployment:
+
+```bash
+#!/bin/bash
+# update-docs.sh - Runs in CI/CD pipeline or as Kubernetes Job
+
+# Start API Extractor sidecar (already running in K8s sidecar pattern)
+API_EXTRACTOR_URL="http://localhost:8000"
+
+# Extract OpenAPI spec
+OPENAPI_SPEC=$(curl -s -X POST "$API_EXTRACTOR_URL/api/v1/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "path": "/app/code",
+    "title": "'"$SERVICE_NAME"' API",
+    "version": "'"$APP_VERSION"'"
+  }' | jq -r '.openapi_spec')
+
+# Generate documentation using tools like redoc-cli or swagger-ui
+echo "$OPENAPI_SPEC" > /docs/openapi.json
+
+# Upload to documentation site
+npx @redocly/cli build-docs /docs/openapi.json -o /docs/index.html
+aws s3 cp /docs/index.html s3://docs-bucket/services/$SERVICE_NAME/
+
+echo "✓ Documentation updated at https://docs.example.com/services/$SERVICE_NAME/"
+```
+
+#### Example 4: Contract Testing
+
+Use extracted OpenAPI specs for consumer-driven contract testing:
+
+```python
+# contract-test.py - Runs in test suite
+import requests
+import pact
+
+# Extract OpenAPI spec from the service
+response = requests.post(
+    "http://api-extractor:8000/api/v1/analyze",
+    json={"path": "/app/code"}
+)
+
+openapi_spec = response.json()["openapi_spec"]
+
+# Use the spec to generate Pact contracts
+pact_broker = pact.Broker("http://pact-broker:9292")
+
+# Publish the OpenAPI spec as a contract
+pact_broker.publish(
+    consumer="frontend-app",
+    provider="user-service",
+    openapi_spec=openapi_spec,
+    version="1.0.0"
+)
+
+# Run contract tests
+verifier = pact.Verifier(provider="user-service")
+verifier.verify_with_broker(
+    broker_url="http://pact-broker:9292",
+    openapi_spec=openapi_spec
+)
+
+print("✓ Contract tests passed")
+```
+
+#### Example 5: Kubernetes Init Container Pattern
+
+Extract OpenAPI spec in an init container before the main application starts:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+spec:
+  template:
+    spec:
+      # Init container extracts OpenAPI spec and stores it
+      initContainers:
+      - name: extract-api-spec
+        image: api-extractor:latest
+        command:
+        - sh
+        - -c
+        - |
+          # Run API Extractor as a CLI tool
+          api-extractor extract /app/code \
+            --output /specs/openapi.json \
+            --title "User Service API" \
+            --version "$APP_VERSION"
+
+          # Validate the spec was created
+          if [ ! -f /specs/openapi.json ]; then
+            echo "Failed to extract OpenAPI spec"
+            exit 1
+          fi
+
+          echo "OpenAPI spec extracted successfully"
+        volumeMounts:
+        - name: app-code
+          mountPath: /app/code
+          readOnly: true
+        - name: api-specs
+          mountPath: /specs
+
+      # Main application container
+      containers:
+      - name: app
+        image: user-service:latest
+        volumeMounts:
+        - name: app-code
+          mountPath: /app/code
+          readOnly: true
+        - name: api-specs
+          mountPath: /specs
+          readOnly: true
+        env:
+        - name: OPENAPI_SPEC_PATH
+          value: /specs/openapi.json
+
+      volumes:
+      - name: app-code
+        emptyDir: {}
+      - name: api-specs
+        emptyDir: {}
 ```
 
 ### Server Configuration
