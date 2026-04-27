@@ -35,6 +35,15 @@ class FrameworkDetector:
         ],
     }
 
+    # C# dependency patterns
+    CSHARP_FRAMEWORK_PATTERNS = {
+        FrameworkType.ASPNET_CORE: [
+            "Microsoft.AspNetCore.App",
+            "Microsoft.AspNetCore.Mvc",
+            "Microsoft.NET.Sdk.Web",
+        ],
+    }
+
     # Python import patterns
     PYTHON_IMPORT_PATTERNS = {
         FrameworkType.FASTAPI: [
@@ -79,6 +88,14 @@ class FrameworkDetector:
         FrameworkType.SPRING_BOOT: [
             r"import\s+org\.springframework\.web\.bind\.annotation\.",
             r"import\s+org\.springframework\.boot\.",
+        ],
+    }
+
+    # C# using patterns
+    CSHARP_IMPORT_PATTERNS = {
+        FrameworkType.ASPNET_CORE: [
+            r"using\s+Microsoft\.AspNetCore\.Mvc",
+            r"using\s+Microsoft\.AspNetCore\.Builder",
         ],
     }
 
@@ -138,6 +155,9 @@ class FrameworkDetector:
 
         # Check Java dependencies
         frameworks.update(self._check_java_dependencies(path))
+
+        # Check C# dependencies
+        frameworks.update(self._check_csharp_dependencies(path))
 
         return frameworks
 
@@ -260,6 +280,36 @@ class FrameworkDetector:
 
         return frameworks
 
+    def _check_csharp_dependencies(self, path: str) -> Set[FrameworkType]:
+        """Check C# project files (.csproj) for ASP.NET Core references."""
+        frameworks: Set[FrameworkType] = set()
+
+        for root, _, files in os.walk(path):
+            if any(skip in root for skip in ["bin", "obj", ".git", "node_modules"]):
+                continue
+
+            for file in files:
+                if file.endswith(".csproj"):
+                    csproj_file = os.path.join(root, file)
+                    try:
+                        with open(csproj_file, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            # Check for Sdk="Microsoft.NET.Sdk.Web"
+                            if 'Sdk="Microsoft.NET.Sdk.Web"' in content:
+                                frameworks.add(FrameworkType.ASPNET_CORE)
+                                return frameworks
+                            # Check for AspNetCore package references
+                            for pattern in self.CSHARP_FRAMEWORK_PATTERNS.get(
+                                FrameworkType.ASPNET_CORE, []
+                            ):
+                                if pattern in content:
+                                    frameworks.add(FrameworkType.ASPNET_CORE)
+                                    return frameworks
+                    except Exception:
+                        pass
+
+        return frameworks
+
     def _check_structure(self, path: str) -> Set[FrameworkType]:
         """
         Check directory structure for framework-specific patterns.
@@ -303,6 +353,9 @@ class FrameworkDetector:
 
         # Scan Java files
         frameworks.update(self._scan_java_imports(path))
+
+        # Scan C# files
+        frameworks.update(self._scan_csharp_imports(path))
 
         return frameworks
 
@@ -391,6 +444,30 @@ class FrameworkDetector:
                                 if any(re.search(pattern, content) for pattern in patterns):
                                     frameworks.add(framework)
                                     # Early exit if we found imports
+                                    if frameworks:
+                                        return frameworks
+                    except Exception:
+                        continue
+
+        return frameworks
+
+    def _scan_csharp_imports(self, path: str) -> Set[FrameworkType]:
+        """Scan C# files for using statements."""
+        frameworks: Set[FrameworkType] = set()
+
+        for root, _, files in os.walk(path):
+            if any(skip in root for skip in ["bin", "obj", ".git", "node_modules"]):
+                continue
+
+            for file in files:
+                if file.endswith(".cs"):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            for framework, patterns in self.CSHARP_IMPORT_PATTERNS.items():
+                                if any(re.search(pattern, content) for pattern in patterns):
+                                    frameworks.add(framework)
                                     if frameworks:
                                         return frameworks
                     except Exception:

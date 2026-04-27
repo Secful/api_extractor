@@ -87,7 +87,7 @@ api-extractor extract <PATH> [OPTIONS]
 
 ## Supported Frameworks
 
-API Extractor supports **8 major web frameworks** across 3 languages, automatically detected via dependency files, imports, and code patterns.
+API Extractor supports **9 major web frameworks** across 4 languages, automatically detected via dependency files, imports, and code patterns.
 
 ### Python Frameworks
 
@@ -132,6 +132,20 @@ API Extractor supports **8 major web frameworks** across 3 languages, automatica
 - Mapping annotations (`@GetMapping`, `@PostMapping`, etc.)
 - `@RequestMapping` with method arrays
 - Path variables and request parameters
+
+### C# Frameworks
+
+| Framework | Version | Detection Method | Real-World Tested |
+|-----------|---------|------------------|-------------------|
+| **ASP.NET Core** | .NET 6+ | `.csproj`, `using` statements | ✅ ASP.NET Core RealWorld |
+
+**Key Features:**
+- `[ApiController]` and `Controller` base class detection
+- HTTP method attributes (`[HttpGet]`, `[HttpPost]`, etc.)
+- `[Route]` attribute with token replacement (`[controller]`, `[action]`)
+- Parameter binding attributes (`[FromRoute]`, `[FromQuery]`, `[FromBody]`)
+- Path constraint normalization (`{id:int}` → `{id}`)
+- DTO and model extraction
 - Maven and Gradle project support
 
 ### Framework-Specific Details
@@ -212,6 +226,38 @@ public class UserController {
 
 **Detection:** `pom.xml`/`build.gradle` dependencies, imports, `@RestController` annotations
 **Validated on:** Spring Boot RealWorld (12 paths, 19 endpoints)
+
+#### ASP.NET Core
+
+Supports .NET 6+ with attribute-based routing:
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController : ControllerBase
+{
+    [HttpGet]
+    public IEnumerable<Product> GetAll()
+    {
+        return productService.GetAll();
+    }
+
+    [HttpGet("{id}")]
+    public Product GetById([FromRoute] int id)
+    {
+        return productService.GetById(id);
+    }
+
+    [HttpPost]
+    public Product Create([FromBody] Product product)
+    {
+        return productService.Create(product);
+    }
+}
+```
+
+**Detection:** `.csproj` with `Sdk="Microsoft.NET.Sdk.Web"`, `using Microsoft.AspNetCore.Mvc`
+**Validated on:** ASP.NET Core RealWorld (23 endpoints across 8 controllers)
 
 #### NestJS
 

@@ -16,6 +16,7 @@ class FrameworkType(str, Enum):
     FASTIFY = "fastify"
     SPRING_BOOT = "spring_boot"
     NEXTJS = "nextjs"
+    ASPNET_CORE = "aspnet_core"
 
 
 class ParameterLocation(str, Enum):

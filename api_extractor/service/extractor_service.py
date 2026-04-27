@@ -48,6 +48,9 @@ def get_extractor(framework: FrameworkType):
     elif framework == FrameworkType.NEXTJS:
         from api_extractor.extractors.javascript.nextjs import NextJSExtractor
         return NextJSExtractor()
+    elif framework == FrameworkType.ASPNET_CORE:
+        from api_extractor.extractors.csharp.aspnet_core import ASPNETCoreExtractor
+        return ASPNETCoreExtractor()
     else:
         return None
 
