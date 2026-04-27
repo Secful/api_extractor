@@ -25,6 +25,15 @@ class FrameworkDetector:
         FrameworkType.FASTIFY: ["fastify"],
     }
 
+    # Java dependency patterns
+    JAVA_FRAMEWORK_PATTERNS = {
+        FrameworkType.SPRING_BOOT: [
+            "spring-boot-starter-web",
+            "spring-web",
+            "spring-webmvc",
+        ],
+    }
+
     # Python import patterns
     PYTHON_IMPORT_PATTERNS = {
         FrameworkType.FASTAPI: [
@@ -56,6 +65,14 @@ class FrameworkDetector:
             r"require\s*\(\s*['\"]fastify['\"]\s*\)",
             r"from\s+['\"]fastify['\"]",
             r"import\s+.*\s+from\s+['\"]fastify['\"]",
+        ],
+    }
+
+    # Java import patterns
+    JAVA_IMPORT_PATTERNS = {
+        FrameworkType.SPRING_BOOT: [
+            r"import\s+org\.springframework\.web\.bind\.annotation\.",
+            r"import\s+org\.springframework\.boot\.",
         ],
     }
 
@@ -109,6 +126,9 @@ class FrameworkDetector:
 
         # Check JavaScript/TypeScript dependencies
         frameworks.update(self._check_js_dependencies(path))
+
+        # Check Java dependencies
+        frameworks.update(self._check_java_dependencies(path))
 
         return frameworks
 
@@ -189,6 +209,48 @@ class FrameworkDetector:
 
         return frameworks
 
+    def _check_java_dependencies(self, path: str) -> Set[FrameworkType]:
+        """Check Java dependency files (Maven pom.xml and Gradle build.gradle)."""
+        frameworks: Set[FrameworkType] = set()
+
+        # Check pom.xml (Maven)
+        pom_file = os.path.join(path, "pom.xml")
+        if os.path.exists(pom_file):
+            try:
+                with open(pom_file, "r", encoding="utf-8") as f:
+                    content = f.read().lower()
+                    for framework, patterns in self.JAVA_FRAMEWORK_PATTERNS.items():
+                        if any(pattern in content for pattern in patterns):
+                            frameworks.add(framework)
+            except Exception:
+                pass
+
+        # Check build.gradle (Gradle)
+        gradle_file = os.path.join(path, "build.gradle")
+        if os.path.exists(gradle_file):
+            try:
+                with open(gradle_file, "r", encoding="utf-8") as f:
+                    content = f.read().lower()
+                    for framework, patterns in self.JAVA_FRAMEWORK_PATTERNS.items():
+                        if any(pattern in content for pattern in patterns):
+                            frameworks.add(framework)
+            except Exception:
+                pass
+
+        # Check build.gradle.kts (Kotlin DSL)
+        gradle_kts_file = os.path.join(path, "build.gradle.kts")
+        if os.path.exists(gradle_kts_file):
+            try:
+                with open(gradle_kts_file, "r", encoding="utf-8") as f:
+                    content = f.read().lower()
+                    for framework, patterns in self.JAVA_FRAMEWORK_PATTERNS.items():
+                        if any(pattern in content for pattern in patterns):
+                            frameworks.add(framework)
+            except Exception:
+                pass
+
+        return frameworks
+
     def _scan_imports(self, path: str) -> Set[FrameworkType]:
         """
         Scan source files for import statements.
@@ -206,6 +268,9 @@ class FrameworkDetector:
 
         # Scan JavaScript/TypeScript files
         frameworks.update(self._scan_js_imports(path))
+
+        # Scan Java files
+        frameworks.update(self._scan_java_imports(path))
 
         return frameworks
 
@@ -275,6 +340,32 @@ class FrameworkDetector:
 
         return frameworks
 
+    def _scan_java_imports(self, path: str) -> Set[FrameworkType]:
+        """Scan Java files for Spring Boot imports."""
+        frameworks: Set[FrameworkType] = set()
+
+        for root, _, files in os.walk(path):
+            # Skip build directories
+            if any(skip in root for skip in ["target", "build", ".git", ".gradle", "node_modules"]):
+                continue
+
+            for file in files:
+                if file.endswith(".java"):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            for framework, patterns in self.JAVA_IMPORT_PATTERNS.items():
+                                if any(re.search(pattern, content) for pattern in patterns):
+                                    frameworks.add(framework)
+                                    # Early exit if we found imports
+                                    if frameworks:
+                                        return frameworks
+                    except Exception:
+                        continue
+
+        return frameworks
+
     def _pattern_match(self, path: str) -> Set[FrameworkType]:
         """
         Last resort: look for framework-specific code patterns.
@@ -305,6 +396,15 @@ class FrameworkDetector:
             ],
             FrameworkType.NESTJS: [r"@Controller\s*\(", r"@(Get|Post|Put|Delete|Patch)\s*\("],
             FrameworkType.FASTIFY: [r"fastify\.(get|post|put|delete|patch)\s*\("],
+        }
+
+        # Java patterns
+        java_patterns = {
+            FrameworkType.SPRING_BOOT: [
+                r"@RestController",
+                r"@(Get|Post|Put|Delete|Patch)Mapping",
+                r"@RequestMapping",
+            ],
         }
 
         # Scan Python files
@@ -339,6 +439,23 @@ class FrameworkDetector:
                         with open(file_path, "r", encoding="utf-8") as f:
                             content = f.read()
                             for framework, patterns in js_patterns.items():
+                                if any(re.search(pattern, content) for pattern in patterns):
+                                    frameworks.add(framework)
+                    except Exception:
+                        continue
+
+        # Scan Java files
+        for root, _, files in os.walk(path):
+            if any(skip in root for skip in ["target", "build", ".git", ".gradle", "node_modules"]):
+                continue
+
+            for file in files:
+                if file.endswith(".java"):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            for framework, patterns in java_patterns.items():
                                 if any(re.search(pattern, content) for pattern in patterns):
                                     frameworks.add(framework)
                     except Exception:

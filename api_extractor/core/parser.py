@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 import tree_sitter_python as tspython
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_typescript as tstypescript
+import tree_sitter_java as tsjava
 from tree_sitter import Language, Parser, Node, Tree
 
 
@@ -39,6 +40,7 @@ class LanguageParser:
         ".jsx": "javascript",
         ".ts": "typescript",
         ".tsx": "tsx",
+        ".java": "java",
     }
 
     def __init__(self) -> None:
@@ -59,6 +61,9 @@ class LanguageParser:
 
         if "tsx" not in self._languages:
             self._languages["tsx"] = Language(tstypescript.language_tsx())
+
+        if "java" not in self._languages:
+            self._languages["java"] = Language(tsjava.language())
 
     def detect_language(self, file_path: str) -> Optional[str]:
         """

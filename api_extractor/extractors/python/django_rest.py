@@ -651,13 +651,18 @@ class DjangoRESTExtractor(BaseExtractor):
         Normalize Django REST path to OpenAPI format.
 
         Already uses {param} format which is OpenAPI compatible.
+        Removes trailing slashes to match OpenAPI conventions (except for root /).
 
         Args:
             path: Django REST path
 
         Returns:
-            Normalized path
+            Normalized path without trailing slash
         """
+        # Django REST Framework adds trailing slashes by default, but OpenAPI
+        # convention is to omit them for consistency with other frameworks
+        if path != "/" and path.endswith("/"):
+            return path.rstrip("/")
         return path
 
     def _find_serializers(self, tree, source_code: bytes) -> Dict[str, Schema]:

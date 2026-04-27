@@ -8,6 +8,7 @@ from api_extractor.core.detector import FrameworkDetector
 from api_extractor.core.models import FrameworkType
 from api_extractor.extractors.python.fastapi import FastAPIExtractor
 from api_extractor.extractors.python.flask import FlaskExtractor
+from api_extractor.extractors.java.spring_boot import SpringBootExtractor
 from api_extractor.openapi.builder import OpenAPIBuilder
 
 
@@ -370,3 +371,147 @@ def test_mixed_framework_detection():
 
     # At least one should be detected
     assert len(framework_names) >= 1
+
+
+def test_full_pipeline_spring_boot():
+    """Test full pipeline with Spring Boot."""
+    # Get fixture path
+    fixture_dir = os.path.join(
+        os.path.dirname(__file__), "..", "fixtures", "minimal", "java"
+    )
+
+    # Extract routes
+    extractor = SpringBootExtractor()
+    result = extractor.extract(fixture_dir)
+    assert result.success
+    assert len(result.endpoints) > 0
+
+    # Build OpenAPI spec
+    builder = OpenAPIBuilder(title="Spring Boot Test", version="1.0.0")
+    spec = builder.build(result.endpoints)
+
+    # Verify spec structure
+    assert spec.openapi == "3.1.0"
+    assert spec.info.title == "Spring Boot Test"
+    assert spec.info.version == "1.0.0"
+    assert len(spec.paths) > 0
+
+    # Verify endpoints have tags
+    assert spec.tags is not None
+    tag_names = {tag.name for tag in spec.tags}
+    assert "spring_boot" in tag_names
+
+    # Verify we can serialize to JSON
+    json_output = builder.to_json(spec)
+    parsed = json.loads(json_output)
+    assert parsed["openapi"] == "3.1.0"
+    assert "paths" in parsed
+
+    # Verify we can serialize to YAML
+    yaml_output = builder.to_yaml(spec)
+    assert "openapi: 3.1.0" in yaml_output
+    assert "paths:" in yaml_output
+
+
+def test_spring_boot_framework_detection():
+    """Test Spring Boot framework detection."""
+    fixture_dir = os.path.join(
+        os.path.dirname(__file__), "..", "fixtures", "minimal", "java"
+    )
+
+    detector = FrameworkDetector()
+    frameworks = detector.detect(fixture_dir)
+
+    assert frameworks is not None
+    assert FrameworkType.SPRING_BOOT in frameworks
+
+
+def test_cli_integration_spring_boot():
+    """Test CLI integration with Spring Boot fixture."""
+    import subprocess
+
+    fixture_dir = os.path.join(
+        os.path.dirname(__file__), "..", "fixtures", "minimal", "java"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = os.path.join(tmpdir, "test-openapi.json")
+
+        # Run CLI
+        result = subprocess.run(
+            [
+                "api-extractor",
+                "extract",
+                fixture_dir,
+                "--output",
+                output_file,
+                "--verbose",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        # Check success
+        assert result.returncode == 0, f"CLI failed: {result.stderr}"
+        assert os.path.exists(output_file)
+
+        # Verify Spring Boot was detected
+        with open(output_file) as f:
+            spec = json.load(f)
+            assert spec["openapi"] == "3.1.0"
+            assert "paths" in spec
+            # Spring Boot fixture has 7 endpoints across 4 unique paths
+            # /health (GET), /api/users (GET, POST), /api/users/{id} (GET, PUT, DELETE), /api/users/search (GET)
+            assert len(spec["paths"]) == 4, f"Expected 4 paths, got {len(spec['paths'])}"
+
+
+def test_cli_integration_spring_boot_realworld():
+    """Test CLI integration with Spring Boot real-world project."""
+    import subprocess
+
+    fixture_dir = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "fixtures",
+        "real-world",
+        "spring-boot-realworld-example-app",
+    )
+
+    # Skip if real-world fixture doesn't exist
+    if not os.path.exists(fixture_dir):
+        pytest.skip("Spring Boot real-world fixture not available")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = os.path.join(tmpdir, "test-openapi.json")
+
+        # Run CLI
+        result = subprocess.run(
+            [
+                "api-extractor",
+                "extract",
+                fixture_dir,
+                "--output",
+                output_file,
+                "--verbose",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        # Check success
+        assert result.returncode == 0, f"CLI failed: {result.stderr}"
+        assert os.path.exists(output_file)
+
+        # Verify real-world app was analyzed
+        with open(output_file) as f:
+            spec = json.load(f)
+            assert spec["openapi"] == "3.1.0"
+            assert "paths" in spec
+            # Real-world Spring Boot app has 19 endpoints across 12 unique paths
+            assert len(spec["paths"]) >= 10, f"Expected at least 10 paths in real-world app, got {len(spec['paths'])}"
+
+            # Verify some expected RealWorld API paths
+            paths = set(spec["paths"].keys())
+            expected_paths = ["/users", "/articles", "/profiles/{username}", "/tags"]
+            found_paths = [p for p in expected_paths if any(exp in path for path in paths for exp in [p])]
+            assert len(found_paths) >= 2, f"Expected to find some standard RealWorld paths, got: {paths}"

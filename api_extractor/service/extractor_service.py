@@ -42,6 +42,9 @@ def get_extractor(framework: FrameworkType):
     elif framework == FrameworkType.FASTIFY:
         from api_extractor.extractors.javascript.fastify import FastifyExtractor
         return FastifyExtractor()
+    elif framework == FrameworkType.SPRING_BOOT:
+        from api_extractor.extractors.java.spring_boot import SpringBootExtractor
+        return SpringBootExtractor()
     else:
         return None
 
