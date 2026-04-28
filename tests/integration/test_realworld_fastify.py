@@ -14,6 +14,8 @@ def fastify_demo_path():
         "..",
         "fixtures",
         "real-world",
+        "javascript",
+        "fastify",
         "fastify-demo",
         "src",
         "routes"

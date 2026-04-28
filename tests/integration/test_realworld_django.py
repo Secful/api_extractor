@@ -16,6 +16,8 @@ def django_tutorial_path():
         "..",
         "fixtures",
         "real-world",
+        "python",
+        "django",
         "django-rest-tutorial"
     )
     if not os.path.exists(path):

@@ -14,6 +14,8 @@ def flask_realworld_path():
         "..",
         "fixtures",
         "real-world",
+        "python",
+        "flask",
         "flask-realworld",
         "conduit"
     )

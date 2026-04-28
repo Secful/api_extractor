@@ -126,6 +126,7 @@ CLAUDE.md
 - Mock external I/O with `pytest-mock` / `respx` (for httpx)
 - Test file mirrors source: `src/mypackage/services/user.py` → `tests/unit/services/test_user.py`
 - Test naming: `test_<function>_<scenario>_<expected>`
+- **Exact match assertions:** Use exact equality (`==`) instead of range checks (`>=`, `<=`) when the expected value is known and stable
 
 ```python
 async def test_get_user_not_found_returns_none():
@@ -133,6 +134,14 @@ async def test_get_user_not_found_returns_none():
 
 async def test_create_user_duplicate_email_raises_conflict():
     ...
+
+# good - exact match
+assert len(result.endpoints) == 332
+assert result.status_code == 200
+
+# bad - range check when exact value is known
+assert len(result.endpoints) >= 300  # fragile, could be 500 and still pass
+assert result.status_code >= 200  # too permissive
 ```
 
 ---

@@ -14,6 +14,8 @@ def express_examples_path():
         "..",
         "fixtures",
         "real-world",
+        "javascript",
+        "express",
         "express-examples"
     )
     if not os.path.exists(path):

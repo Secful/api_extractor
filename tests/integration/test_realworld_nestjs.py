@@ -14,6 +14,8 @@ def nestjs_realworld_path():
         "..",
         "fixtures",
         "real-world",
+        "javascript",
+        "nestjs",
         "nestjs-realworld",
         "src"
     )

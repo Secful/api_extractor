@@ -17,6 +17,8 @@ from api_extractor.core.models import HTTPMethod
             "..",
             "fixtures",
             "real-world",
+            "go",
+            "gin",
             "golang-gin-realworld-example-app",
         )
     ),
@@ -30,6 +32,8 @@ def test_realworld_extraction():
         "..",
         "fixtures",
         "real-world",
+        "go",
+        "gin",
         "golang-gin-realworld-example-app",
     )
 
@@ -51,6 +55,8 @@ def test_realworld_extraction():
             "..",
             "fixtures",
             "real-world",
+            "go",
+            "gin",
             "golang-gin-realworld-example-app",
         )
     ),
@@ -63,6 +69,8 @@ def test_realworld_standard_paths():
         "..",
         "fixtures",
         "real-world",
+        "go",
+        "gin",
         "golang-gin-realworld-example-app",
     )
 
@@ -96,6 +104,8 @@ def test_realworld_standard_paths():
             "..",
             "fixtures",
             "real-world",
+            "go",
+            "gin",
             "golang-gin-realworld-example-app",
         )
     ),
@@ -108,6 +118,8 @@ def test_realworld_http_methods():
         "..",
         "fixtures",
         "real-world",
+        "go",
+        "gin",
         "golang-gin-realworld-example-app",
     )
 
@@ -132,6 +144,8 @@ def test_realworld_http_methods():
             "..",
             "fixtures",
             "real-world",
+            "go",
+            "gin",
             "golang-gin-realworld-example-app",
         )
     ),
@@ -144,6 +158,8 @@ def test_realworld_path_parameters():
         "..",
         "fixtures",
         "real-world",
+        "go",
+        "gin",
         "golang-gin-realworld-example-app",
     )
 
@@ -173,6 +189,8 @@ def test_realworld_path_parameters():
             "..",
             "fixtures",
             "real-world",
+            "go",
+            "gin",
             "golang-gin-realworld-example-app",
         )
     ),
@@ -185,6 +203,8 @@ def test_realworld_source_tracking():
         "..",
         "fixtures",
         "real-world",
+        "go",
+        "gin",
         "golang-gin-realworld-example-app",
     )
 
@@ -208,6 +228,8 @@ def test_realworld_source_tracking():
             "..",
             "fixtures",
             "real-world",
+            "go",
+            "gin",
             "golang-gin-realworld-example-app",
         )
     ),
@@ -220,6 +242,8 @@ def test_realworld_file_structure():
         "..",
         "fixtures",
         "real-world",
+        "go",
+        "gin",
         "golang-gin-realworld-example-app",
     )
 
@@ -244,6 +268,8 @@ def test_realworld_file_structure():
             "..",
             "fixtures",
             "real-world",
+            "go",
+            "gin",
             "golang-gin-realworld-example-app",
         )
     ),
@@ -256,6 +282,8 @@ def test_realworld_route_groups():
         "..",
         "fixtures",
         "real-world",
+        "go",
+        "gin",
         "golang-gin-realworld-example-app",
     )
 
@@ -286,6 +314,8 @@ def test_realworld_route_groups():
             "..",
             "fixtures",
             "real-world",
+            "go",
+            "gin",
             "golang-gin-realworld-example-app",
         )
     ),
@@ -298,6 +328,8 @@ def test_realworld_no_duplicate_paths():
         "..",
         "fixtures",
         "real-world",
+        "go",
+        "gin",
         "golang-gin-realworld-example-app",
     )
 

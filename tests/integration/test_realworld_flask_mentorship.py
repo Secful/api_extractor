@@ -1,4 +1,15 @@
-"""Integration tests for Flask extractor with Mentorship Backend."""
+"""Integration tests for Flask extractor with Mentorship Backend.
+
+The mentorship-backend repository uses Flask-RESTX with namespace-based routing:
+
+    users_ns = Namespace("Users", description="...")
+    @users_ns.route("users")
+    class UsersList(Resource):
+        def get(self):
+            ...
+
+The Flask extractor now supports Flask-RESTX patterns!
+"""
 
 from __future__ import annotations
 
@@ -18,6 +29,8 @@ def mentorship_path():
         "..",
         "fixtures",
         "real-world",
+        "python",
+        "flask",
         "mentorship-backend",
     )
     if not os.path.exists(path):
@@ -26,7 +39,7 @@ def mentorship_path():
 
 
 class TestFlaskMentorshipBackend:
-    """Integration tests for AnitaB.org Mentorship Backend."""
+    """Integration tests for AnitaB.org Mentorship Backend with Flask-RESTX."""
 
     def test_extraction(self, mentorship_path: str) -> None:
         """Test extraction from Mentorship Backend.

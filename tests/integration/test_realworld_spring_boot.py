@@ -18,7 +18,11 @@ def spring_boot_realworld_path():
         "..",
         "fixtures",
         "real-world",
-        "spring-boot-realworld-example-app",
+        "java",
+        "spring-boot",
+        "java",
+            "spring-boot",
+            "spring-boot-realworld-example-app",
     )
 
 

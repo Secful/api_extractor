@@ -18,6 +18,8 @@ def docflow_path():
         "..",
         "fixtures",
         "real-world",
+        "python",
+        "fastapi",
         "docflow",
     )
     if not os.path.exists(path):

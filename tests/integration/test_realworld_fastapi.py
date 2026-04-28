@@ -14,6 +14,8 @@ def fastapi_fullstack_path():
         "..",
         "fixtures",
         "real-world",
+        "python",
+        "fastapi",
         "fastapi-fullstack",
         "backend",
         "app"

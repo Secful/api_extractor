@@ -35,6 +35,14 @@ class DjangoRESTExtractor(BaseExtractor):
         # Map of ViewSet class names to their registered paths
         # e.g., {"SnippetViewSet": "snippets", "UserViewSet": "users"}
         self.viewset_registrations: Dict[str, str] = {}
+        # Map of URL file paths to their URL prefixes from include()
+        # e.g., {"circuits/api/urls.py": "/api/circuits/"}
+        self.url_includes: Dict[str, str] = {}
+        # Map of router variable names to their URL prefixes
+        # e.g., {"router": "/api/v2/"} for path('api/v2/', include(router.urls))
+        self.router_prefixes: Dict[str, str] = {}
+        # Base path for the project (set during extract())
+        self.base_path: str = ""
 
     def get_file_extensions(self) -> List[str]:
         """Get Python file extensions."""
@@ -42,9 +50,10 @@ class DjangoRESTExtractor(BaseExtractor):
 
     def extract(self, path: str):
         """
-        Override extract to do two-pass extraction:
-        1. First pass: scan urls.py files to find router.register() calls
-        2. Second pass: extract ViewSets from views.py with correct paths
+        Override extract to do three-pass extraction:
+        1. First pass: scan urls.py files to find path(..., include(...)) calls
+        2. Second pass: scan urls.py files to find router.register() calls
+        3. Third pass: extract ViewSets from views.py with correct paths
 
         Args:
             path: Path to codebase directory
@@ -56,11 +65,22 @@ class DjangoRESTExtractor(BaseExtractor):
         self.errors = []
         self.warnings = []
         self.viewset_registrations = {}
+        self.url_includes = {}
+        self.router_prefixes = {}
+        self.base_path = path
 
         # Find all relevant files
         files = self._find_source_files(path)
 
-        # Pass 1: Extract router registrations from urls.py files
+        # Pass 1: Extract URL includes to build prefix mappings
+        for file_path in files:
+            if file_path.endswith('urls.py'):
+                try:
+                    self._extract_url_includes(file_path)
+                except Exception as e:
+                    self.errors.append(f"Error extracting URL includes from {file_path}: {str(e)}")
+
+        # Pass 2: Extract router registrations from urls.py files
         for file_path in files:
             if file_path.endswith('urls.py'):
                 try:
@@ -68,7 +88,7 @@ class DjangoRESTExtractor(BaseExtractor):
                 except Exception as e:
                     self.errors.append(f"Error extracting router registrations from {file_path}: {str(e)}")
 
-        # Pass 2: Extract routes from all files (now with registration info)
+        # Pass 3: Extract routes from all files (now with include and registration info)
         all_routes = []
         for file_path in files:
             try:
@@ -97,13 +117,49 @@ class DjangoRESTExtractor(BaseExtractor):
             frameworks_detected=[self.framework],
         )
 
-    def _extract_router_registrations(self, file_path: str) -> None:
+    def _get_url_prefix_for_file(self, file_path: str) -> str | None:
         """
-        Extract router.register() calls from urls.py file.
+        Get the URL prefix for a given file path based on include() mappings.
+
+        Args:
+            file_path: Absolute path to the file
+
+        Returns:
+            URL prefix (e.g., '/api/circuits/') or None if no mapping found
+        """
+        import os
+
+        # Make file path relative to base path
+        if file_path.startswith(self.base_path):
+            relative_path = file_path[len(self.base_path):].lstrip('/')
+        else:
+            relative_path = file_path
+
+        # Check if this file is in the same directory as an included urls.py
+        # For example, if circuits/api/urls.py is included, then circuits/api/views.py
+        # should get the same prefix
+        for include_path, prefix in self.url_includes.items():
+            # Get the directory of the included urls.py file
+            include_dir = os.path.dirname(include_path)
+
+            # Check if the current file is in that directory
+            file_dir = os.path.dirname(relative_path)
+
+            # Match if the directory paths are the same or if file_dir ends with include_dir
+            if file_dir == include_dir or file_dir.endswith(include_dir):
+                return prefix
+
+        return None
+
+    def _extract_url_includes(self, file_path: str) -> None:
+        """
+        Extract path(..., include(...)) calls from urls.py file.
 
         Parses patterns like:
-        router.register(r'snippets', views.SnippetViewSet)
-        router.register('users', UserViewSet)
+        path('api/circuits/', include('circuits.api.urls'))
+        path('api/', include('myapp.urls'))
+
+        Builds mapping of included URL files to their URL prefixes.
 
         Args:
             file_path: Path to urls.py file
@@ -115,6 +171,114 @@ class DjangoRESTExtractor(BaseExtractor):
         tree = self.parser.parse_source(source_code, "python")
         if not tree:
             return
+
+        # Query for path(..., include(...)) calls
+        # Matches: path('prefix/', include('module.path'))
+        path_include_query = """
+        (call
+          function: (identifier) @func_name
+          arguments: (argument_list) @args)
+        """
+
+        matches = self.parser.query(tree, path_include_query, "python")
+        for match in matches:
+            func_name_node = match.get("func_name")
+            args_node = match.get("args")
+
+            if not func_name_node or not args_node:
+                continue
+
+            func_name = self.parser.get_node_text(func_name_node, source_code)
+
+            # Check if this is a path() call
+            if func_name != "path":
+                continue
+
+            # Extract arguments
+            url_prefix = None
+            include_module = None
+
+            for child in args_node.children:
+                if child.type in ("string", "raw_string_literal") and url_prefix is None:
+                    # First string argument is the URL prefix
+                    text = self.parser.get_node_text(child, source_code).strip()
+                    if text.startswith(("r'", 'r"')):
+                        url_prefix = text[2:-1]
+                    elif text.startswith(("'", '"')):
+                        url_prefix = text[1:-1]
+                elif child.type == "call":
+                    # Check if this is an include() call
+                    func_node = child.child_by_field_name("function")
+                    if func_node:
+                        func_text = self.parser.get_node_text(func_node, source_code)
+                        if func_text == "include":
+                            # Extract the module path from include() argument
+                            include_args = child.child_by_field_name("arguments")
+                            if include_args:
+                                for arg_child in include_args.children:
+                                    if arg_child.type in ("string", "raw_string_literal"):
+                                        text = self.parser.get_node_text(arg_child, source_code).strip()
+                                        if text.startswith(("'", '"')):
+                                            include_module = text[1:-1]
+                                        break
+                                    elif arg_child.type == "attribute":
+                                        # Handle include(router.urls) pattern
+                                        attr_text = self.parser.get_node_text(arg_child, source_code)
+                                        if attr_text.endswith(".urls"):
+                                            # Extract router variable name
+                                            router_var = attr_text.rsplit(".", 1)[0]
+                                            # Store router prefix mapping
+                                            if url_prefix:
+                                                prefix = url_prefix if url_prefix.startswith('/') else '/' + url_prefix
+                                                if not prefix.endswith('/'):
+                                                    prefix = prefix + '/'
+                                                self.router_prefixes[router_var] = prefix
+                                        break
+
+            # If we found both prefix and module, create mapping
+            if url_prefix and include_module:
+                # Convert module path to file path
+                # 'circuits.api.urls' -> 'circuits/api/urls.py'
+                file_relative_path = include_module.replace('.', '/') + '.py'
+
+                # Normalize prefix to start and end with /
+                if not url_prefix.startswith('/'):
+                    url_prefix = '/' + url_prefix
+                if not url_prefix.endswith('/'):
+                    url_prefix = url_prefix + '/'
+
+                # Store the mapping
+                self.url_includes[file_relative_path] = url_prefix
+
+    def _extract_router_registrations(self, file_path: str) -> None:
+        """
+        Extract router.register() calls from urls.py file.
+
+        Parses patterns like:
+        router.register(r'snippets', views.SnippetViewSet)
+        router.register('users', UserViewSet)
+
+        Also checks if this router has a URL prefix from include(router.urls).
+
+        Args:
+            file_path: Path to urls.py file
+        """
+        source_code = self._read_file(file_path)
+        if not source_code:
+            return
+
+        tree = self.parser.parse_source(source_code, "python")
+        if not tree:
+            return
+
+        # Check if any router in this file has a prefix
+        router_prefix_in_file = None
+        for router_var, prefix in self.router_prefixes.items():
+            # Simple heuristic: if this file contains router.register() calls,
+            # assume it's the file where the router is defined
+            if router_var.encode() in source_code:
+                router_prefix_in_file = prefix
+                break
 
         # Query for router.register() calls
         register_query = """
@@ -173,6 +337,12 @@ class DjangoRESTExtractor(BaseExtractor):
             if len(args) >= 2:
                 path_prefix = args[0]
                 viewset_class = args[1]
+
+                # Apply router prefix if this router is included with a prefix
+                if router_prefix_in_file:
+                    # Combine router prefix with registration path
+                    path_prefix = router_prefix_in_file.rstrip('/') + '/' + path_prefix.lstrip('/')
+
                 # Store the mapping
                 self.viewset_registrations[viewset_class] = path_prefix
 
@@ -237,9 +407,23 @@ class DjangoRESTExtractor(BaseExtractor):
 
             # Get the registered path for this ViewSet, or generate one as fallback
             if class_name in self.viewset_registrations:
-                base_path = f"/{self.viewset_registrations[class_name]}/"
+                registered_path = self.viewset_registrations[class_name]
+                # If path already starts with /, don't add another one
+                if registered_path.startswith('/'):
+                    base_path = f"{registered_path}/"
+                else:
+                    base_path = f"/{registered_path}/"
             else:
                 base_path = self._generate_path_from_class_name(class_name)
+
+            # Apply URL prefix from include() if this file is included in main urls
+            url_prefix = self._get_url_prefix_for_file(file_path)
+            if url_prefix:
+                # Combine prefix and base_path, avoiding double slashes
+                base_path = base_path.lstrip('/')
+                if not url_prefix.endswith('/'):
+                    url_prefix = url_prefix + '/'
+                base_path = url_prefix + base_path
 
             location = self.parser.get_node_location(class_name_node)
 

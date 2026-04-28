@@ -27,6 +27,7 @@ class FlaskExtractor(BaseExtractor):
         """Initialize Flask extractor."""
         super().__init__(FrameworkType.FLASK)
         self.blueprints: Dict[str, str] = {}  # blueprint_var -> url_prefix
+        self.namespaces: Dict[str, str] = {}  # namespace_var -> url_prefix (Flask-RESTX)
 
     def get_file_extensions(self) -> List[str]:
         """Get Python file extensions."""
@@ -57,10 +58,15 @@ class FlaskExtractor(BaseExtractor):
         # Find Pydantic models (if any)
         pydantic_models = self._find_pydantic_models(tree, source_code)
 
-        # First pass: Find Blueprint definitions using query
+        # First pass: Find Blueprint and Namespace definitions using query
         self._extract_blueprints_query(tree, source_code)
+        self._extract_namespaces_query(tree, source_code)
 
-        # Second pass: Find route decorators using query
+        # Second pass: Find Flask-RESTX Resource classes (must be before regular routes)
+        restx_routes = self._extract_restx_resources(tree, source_code, file_path)
+        routes.extend(restx_routes)
+
+        # Third pass: Find route decorators using query
         # Query for @app.route() or @blueprint.route() or @app.get/post/etc
         route_query = """
         (decorated_definition
@@ -207,6 +213,196 @@ class FlaskExtractor(BaseExtractor):
 
             self.blueprints[var_name] = url_prefix or ""
 
+    def _extract_namespaces_query(self, tree, source_code: bytes) -> None:
+        """
+        Extract Flask-RESTX Namespace definitions using queries.
+
+        Args:
+            tree: Syntax tree
+            source_code: Source code bytes
+        """
+        # Query for Namespace assignments: var_name = Namespace(...)
+        namespace_query = """
+        (expression_statement
+          (assignment
+            left: (identifier) @var_name
+            right: (call
+              function: (identifier) @func_name
+              arguments: (argument_list) @args)))
+        """
+
+        namespace_matches = self.parser.query(tree, namespace_query, "python")
+
+        for match in namespace_matches:
+            var_name_node = match.get("var_name")
+            func_name_node = match.get("func_name")
+            args_node = match.get("args")
+
+            if not var_name_node or not func_name_node:
+                continue
+
+            func_name = self.parser.get_node_text(func_name_node, source_code)
+            if func_name != "Namespace":
+                continue
+
+            var_name = self.parser.get_node_text(var_name_node, source_code)
+
+            # Namespace paths come from api.add_namespace(ns, path='/prefix') calls
+            # which are often in different files. Default to "" (empty) for all namespaces.
+            # The actual route paths (from @namespace.route()) will define the full path.
+            self.namespaces[var_name] = ""
+
+    def _extract_namespace_name(self, args_node: Node, source_code: bytes) -> Optional[str]:
+        """
+        Extract namespace name from Namespace arguments.
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+
+        Returns:
+            Namespace name or None
+        """
+        # First argument should be the namespace name
+        for child in args_node.children:
+            if child.type == "string":
+                return self.parser.extract_string_value(child, source_code)
+        return None
+
+    def _extract_restx_resources(self, tree, source_code: bytes, file_path: str) -> List[Route]:
+        """
+        Extract Flask-RESTX Resource classes with @namespace.route() decorators.
+
+        Args:
+            tree: Syntax tree
+            source_code: Source code bytes
+            file_path: Path to current file
+
+        Returns:
+            List of Route objects
+        """
+        routes = []
+
+        # Query for decorated class definitions
+        resource_query = """
+        (decorated_definition
+          (decorator
+            (call
+              function: (attribute
+                object: (identifier) @namespace_var
+                attribute: (identifier) @method_name)
+              arguments: (argument_list) @args))
+          definition: (class_definition
+            name: (identifier) @class_name
+            body: (block) @class_body))
+        """
+
+        resource_matches = self.parser.query(tree, resource_query, "python")
+
+        for match in resource_matches:
+            namespace_var_node = match.get("namespace_var")
+            method_name_node = match.get("method_name")
+            args_node = match.get("args")
+            class_name_node = match.get("class_name")
+            class_body_node = match.get("class_body")
+
+            if not all([namespace_var_node, method_name_node, class_name_node, class_body_node]):
+                continue
+
+            namespace_var = self.parser.get_node_text(namespace_var_node, source_code)
+            method_name = self.parser.get_node_text(method_name_node, source_code)
+
+            # Check if it's a namespace route decorator
+            if method_name != "route":
+                continue
+
+            # If namespace var is not known, add it with default "" prefix
+            # (namespaces might be imported from other files)
+            if namespace_var not in self.namespaces:
+                self.namespaces[namespace_var] = ""
+
+            # Extract path from decorator arguments
+            path = self._extract_path_from_arguments(args_node, source_code)
+            if not path:
+                continue
+
+            # Ensure path has leading slash
+            if not path.startswith("/"):
+                path = "/" + path
+
+            # Get namespace prefix (default to "" if not found)
+            namespace_prefix = self.namespaces.get(namespace_var, "")
+
+            # Combine prefix and path, avoiding double slashes
+            if namespace_prefix:
+                # Remove trailing slash from prefix if present
+                namespace_prefix = namespace_prefix.rstrip("/")
+                full_path = namespace_prefix + path
+            else:
+                full_path = path
+
+            class_name = self.parser.get_node_text(class_name_node, source_code)
+            location = self.parser.get_node_location(class_name_node)
+
+            # Extract HTTP methods from Resource class body
+            http_methods = self._extract_resource_methods(class_body_node, source_code)
+
+            if not http_methods:
+                # If no HTTP methods found, skip this resource
+                continue
+
+            # Create a route for each HTTP method
+            for http_method in http_methods:
+                route = Route(
+                    path=full_path,
+                    methods=[http_method],
+                    handler_name=f"{class_name}.{http_method.value.lower()}",
+                    framework=self.framework,
+                    raw_path=full_path,
+                    source_file=file_path,
+                    source_line=location["start_line"],
+                    metadata={"restx_resource": True, "class_name": class_name},
+                )
+                routes.append(route)
+
+        return routes
+
+    def _extract_resource_methods(self, class_body_node: Node, source_code: bytes) -> List[HTTPMethod]:
+        """
+        Extract HTTP methods from Flask-RESTX Resource class body.
+
+        Args:
+            class_body_node: Class body node
+            source_code: Source code bytes
+
+        Returns:
+            List of HTTPMethod enums
+        """
+        methods = []
+        http_method_names = ["get", "post", "put", "delete", "patch", "head", "options"]
+
+        # Look for method definitions in class body (can be decorated or not)
+        for child in class_body_node.children:
+            func_def_node = None
+
+            if child.type == "function_definition":
+                func_def_node = child
+            elif child.type == "decorated_definition":
+                # Get the function definition from decorated_definition
+                func_def_node = child.child_by_field_name("definition")
+
+            if func_def_node and func_def_node.type == "function_definition":
+                name_node = func_def_node.child_by_field_name("name")
+                if name_node:
+                    method_name = self.parser.get_node_text(name_node, source_code)
+                    if method_name in http_method_names:
+                        try:
+                            methods.append(HTTPMethod[method_name.upper()])
+                        except KeyError:
+                            pass
+
+        return methods
+
     def _extract_url_prefix(self, args_node: Node, source_code: bytes) -> Optional[str]:
         """
         Extract url_prefix from Blueprint arguments.
@@ -276,8 +472,9 @@ class FlaskExtractor(BaseExtractor):
                 name = self.parser.get_node_text(name_node, source_code)
                 if name == "methods":
                     value_node = self.parser.find_child_by_field(child, "value")
-                    if value_node and value_node.type == "list":
-                        # Extract strings from list
+                    # Flask uses both lists and tuples: methods=['GET'] or methods=('GET',)
+                    if value_node and value_node.type in ("list", "tuple"):
+                        # Extract strings from list or tuple
                         for list_child in value_node.children:
                             if list_child.type == "string":
                                 method_str = self.parser.extract_string_value(
