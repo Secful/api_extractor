@@ -149,9 +149,21 @@ class NextJSExtractor(BaseExtractor):
                 parameters: (formal_parameters) @params))))
         """
 
+        # NEW: Check for wrapper function pattern
+        # Matches: export const GET = withAuth(async () => {...})
+        # Matches: export const POST = defaultResponderForAppDir(handler)
+        export_wrapper_query = """
+        (export_statement
+          (lexical_declaration
+            (variable_declarator
+              name: (identifier) @func_name
+              value: (call_expression))))
+        """
+
         matches = self.parser.query(tree, export_query, language)
         arrow_matches = self.parser.query(tree, export_arrow_query, language)
-        all_matches = matches + arrow_matches
+        wrapper_matches = self.parser.query(tree, export_wrapper_query, language)
+        all_matches = matches + arrow_matches + wrapper_matches
 
         for match in all_matches:
             func_name_node = match.get("func_name")

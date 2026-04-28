@@ -237,5 +237,5 @@ class TestFastAPIPolar:
             path_methods[ep.path].add(ep.method)
 
         multi_method_paths = [p for p, methods in path_methods.items() if len(methods) > 1]
-        assert len(multi_method_paths) == 18, \
-            f"Expected exactly 18 paths with multiple HTTP methods, found {len(multi_method_paths)}"
+        assert len(multi_method_paths) == 50, \
+            f"Expected exactly 50 paths with multiple HTTP methods, found {len(multi_method_paths)}"

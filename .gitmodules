@@ -25,3 +25,6 @@
 [submodule "tests/fixtures/real-world/mentorship-backend"]
 	path = tests/fixtures/real-world/python/flask/mentorship-backend
 	url = https://github.com/anitab-org/mentorship-backend.git
+[submodule "tests/fixtures/real-world/go/gin/tests/fixtures/real-world/go/gin/alist"]
+	path = tests/fixtures/real-world/go/gin/tests/fixtures/real-world/go/gin/alist
+	url = https://github.com/AlistGo/alist.git

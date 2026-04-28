@@ -64,10 +64,21 @@ class ASPNETCoreExtractor(BaseExtractor):
     ARRAY_TYPES = ["List", "IEnumerable", "ICollection", "IList", "Array", "HashSet", "ISet"]
     DICT_TYPES = ["Dictionary", "IDictionary", "Hashtable"]
 
+    # Minimal API method mappings
+    MINIMAL_API_METHODS = {
+        "MapGet": HTTPMethod.GET,
+        "MapPost": HTTPMethod.POST,
+        "MapPut": HTTPMethod.PUT,
+        "MapDelete": HTTPMethod.DELETE,
+        "MapPatch": HTTPMethod.PATCH,
+    }
+
     def __init__(self) -> None:
         """Initialize ASP.NET Core extractor."""
         super().__init__(FrameworkType.ASPNET_CORE)
         self.parser = LanguageParser()
+        # Track MapGroup prefix mappings: {variable_name: prefix_path}
+        self.map_group_prefixes: Dict[str, str] = {}
 
     def get_file_extensions(self) -> List[str]:
         """Get supported file extensions."""
@@ -75,7 +86,7 @@ class ASPNETCoreExtractor(BaseExtractor):
 
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
         """
-        Extract routes from ASP.NET Core controller file.
+        Extract routes from ASP.NET Core file (Controllers or Minimal APIs).
 
         Args:
             file_path: Path to C# source file
@@ -98,6 +109,7 @@ class ASPNETCoreExtractor(BaseExtractor):
         # Find all DTO classes for schema extraction
         dto_schemas = self._find_dto_classes(tree, source_code)
 
+        # First, extract Controller-based routes
         # Query for class declarations
         class_query = """
         (class_declaration
@@ -129,6 +141,10 @@ class ASPNETCoreExtractor(BaseExtractor):
                 class_decl_node, source_code, base_path, file_path, dto_schemas
             )
             routes.extend(method_routes)
+
+        # Second, extract Minimal API routes
+        minimal_api_routes = self._extract_minimal_api_routes(tree, source_code, file_path)
+        routes.extend(minimal_api_routes)
 
         return routes
 
@@ -709,6 +725,188 @@ class ASPNETCoreExtractor(BaseExtractor):
             "type": prop_type or "object",
             "required": not nullable,
         }
+
+    def _extract_minimal_api_routes(
+        self, tree, source_code: bytes, file_path: str
+    ) -> List[Route]:
+        """
+        Extract routes from Minimal API patterns (MapGet, MapPost, MapGroup, etc.).
+
+        Args:
+            tree: Parsed AST tree
+            source_code: Source code bytes
+            file_path: Source file path
+
+        Returns:
+            List of Route objects
+        """
+        routes = []
+
+        # Reset MapGroup tracking for this file
+        self.map_group_prefixes = {}
+
+        # First pass: Extract MapGroup() calls to build prefix mappings
+        # Pattern: var api = app.MapGroup("api/catalog");
+        #      or: var api = vApi.MapGroup("api/catalog").HasApiVersion(1, 0);
+        # We need to look for any assignment where MapGroup is somewhere in the expression
+        map_group_query = """
+        (local_declaration_statement
+          (variable_declaration
+            (variable_declarator
+              (identifier) @var_name
+              (_) @expression)))
+        """
+
+        group_matches = self.parser.query(tree, map_group_query, "csharp")
+
+        for match in group_matches:
+            var_name = match.get("var_name")
+            expression = match.get("expression")
+
+            if not var_name or not expression:
+                continue
+
+            var_name_text = self.parser.get_node_text(var_name, source_code)
+
+            # Search the expression for MapGroup() calls
+            path = self._find_map_group_in_expression(expression, source_code)
+            if path:
+                self.map_group_prefixes[var_name_text] = path
+
+        # Second pass: Extract MapGet(), MapPost(), etc. calls
+        # Pattern: api.MapGet("/items", handler);
+        map_method_query = """
+        (invocation_expression
+          function: (member_access_expression
+            expression: (identifier) @var_name
+            name: (identifier) @method_name)
+          arguments: (argument_list
+            (argument
+              (string_literal) @path_literal))) @invocation
+        """
+
+        method_matches = self.parser.query(tree, map_method_query, "csharp")
+
+        for match in method_matches:
+            method_name = match.get("method_name")
+            if not method_name:
+                continue
+
+            method_name_text = self.parser.get_node_text(method_name, source_code)
+
+            # Check if this is a Minimal API method
+            if method_name_text not in self.MINIMAL_API_METHODS:
+                continue
+
+            http_method = self.MINIMAL_API_METHODS[method_name_text]
+
+            var_name = match.get("var_name")
+            path_literal = match.get("path_literal")
+            invocation = match.get("invocation")
+
+            if not path_literal:
+                continue
+
+            # Extract path
+            path = self._extract_string_literal_content(path_literal, source_code)
+            if not path:
+                continue
+
+            # Check if variable has a prefix from MapGroup
+            if var_name:
+                var_name_text = self.parser.get_node_text(var_name, source_code)
+                prefix = self.map_group_prefixes.get(var_name_text, "")
+                if prefix:
+                    path = self._combine_paths(prefix, path)
+
+            # Normalize path (remove constraints like {id:int})
+            normalized_path = self._normalize_path(path)
+
+            # Get source line
+            source_line = invocation.start_point[0] + 1 if invocation else 1
+
+            # Create route
+            route = Route(
+                path=normalized_path,
+                methods=[http_method],
+                handler_name=f"{method_name_text}_handler",
+                framework=FrameworkType.ASPNET_CORE,
+                raw_path=path,
+                source_file=file_path,
+                source_line=source_line,
+                metadata={"minimal_api": True},
+            )
+
+            routes.append(route)
+
+        return routes
+
+    def _find_map_group_in_expression(
+        self, expression_node: Node, source_code: bytes
+    ) -> Optional[str]:
+        """
+        Recursively search for MapGroup() call in an expression and extract its path argument.
+
+        Args:
+            expression_node: Expression node to search
+            source_code: Source code bytes
+
+        Returns:
+            Path string or None
+        """
+        # Check if this node is an invocation_expression
+        if expression_node.type == "invocation_expression":
+            # Check if the function is a member_access_expression with name "MapGroup"
+            for child in expression_node.children:
+                if child.type == "member_access_expression":
+                    # Check the name
+                    for member_child in child.children:
+                        if member_child.type == "identifier":
+                            method_name = self.parser.get_node_text(member_child, source_code)
+                            if method_name == "MapGroup":
+                                # Found it! Extract the path argument
+                                for inv_child in expression_node.children:
+                                    if inv_child.type == "argument_list":
+                                        for arg_child in inv_child.children:
+                                            if arg_child.type == "argument":
+                                                for arg_part in arg_child.children:
+                                                    if arg_part.type == "string_literal":
+                                                        return self._extract_string_literal_content(
+                                                            arg_part, source_code
+                                                        )
+
+        # Recursively search children
+        for child in expression_node.children:
+            result = self._find_map_group_in_expression(child, source_code)
+            if result:
+                return result
+
+        return None
+
+    def _extract_string_literal_content(
+        self, string_literal_node: Node, source_code: bytes
+    ) -> Optional[str]:
+        """
+        Extract content from string_literal node.
+
+        Args:
+            string_literal_node: String literal node
+            source_code: Source code bytes
+
+        Returns:
+            String content or None
+        """
+        # Look for string_literal_content child
+        for child in string_literal_node.children:
+            if child.type == "string_literal_content":
+                return self.parser.get_node_text(child, source_code)
+
+        # If no child, try to extract directly and remove quotes
+        text = self.parser.get_node_text(string_literal_node, source_code)
+        if text.startswith('"') and text.endswith('"'):
+            return text[1:-1]
+
+        return text
 
     def convert_route_to_endpoint(self, route: Route) -> Endpoint:
         """

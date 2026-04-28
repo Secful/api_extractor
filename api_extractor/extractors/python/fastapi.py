@@ -26,10 +26,292 @@ class FastAPIExtractor(BaseExtractor):
     def __init__(self) -> None:
         """Initialize FastAPI extractor."""
         super().__init__(FrameworkType.FASTAPI)
+        # Map of file paths to router variable names and their prefixes
+        # e.g., {"/path/to/endpoints.py": {"router": "/organizations"}}
+        self.router_definitions: Dict[str, Dict[str, str]] = {}
+        # Map of router variable names to their URL prefixes after include
+        # e.g., {"/v1": {"/organizations": "organization_router"}}
+        self.router_includes: Dict[str, Dict[str, str]] = {}
+        # Base path for the project (set during extract())
+        self.base_path: str = ""
+        # Global prefix from main router file (api.py, main.py, app.py)
+        self.global_prefix: Optional[str] = None
 
     def get_file_extensions(self) -> List[str]:
         """Get Python file extensions."""
         return [".py"]
+
+    def extract(self, path: str):
+        """
+        Override extract to do multi-pass extraction:
+        1. First pass: scan files to find APIRouter(prefix="...") definitions
+        2. Second pass: scan files to find router.include_router() calls
+        3. Third pass: extract routes with correct prefix chains
+
+        Args:
+            path: Path to codebase directory
+
+        Returns:
+            ExtractionResult with endpoints and any errors
+        """
+        self.endpoints = []
+        self.errors = []
+        self.warnings = []
+        self.router_definitions = {}
+        self.router_includes = {}
+        self.base_path = path
+        self.global_prefix = None
+
+        # Find all relevant files
+        files = self._find_source_files(path)
+
+        # Pass 1: Extract router definitions to find prefixes
+        # Also detect global prefix from main router files
+        for file_path in files:
+            try:
+                self._extract_router_definitions(file_path)
+                # Check if this is a main aggregator file
+                filename = file_path.split('/')[-1]
+                if filename in ('api.py', 'main.py', 'app.py') and self.global_prefix is None:
+                    # Try to extract prefix from this file's router
+                    if file_path in self.router_definitions:
+                        routers = self.router_definitions[file_path]
+                        # Use the first router's prefix as global prefix
+                        if routers:
+                            self.global_prefix = next(iter(routers.values()))
+            except Exception as e:
+                self.errors.append(f"Error extracting router definitions from {file_path}: {str(e)}")
+
+        # Pass 2: Extract router includes to build hierarchy
+        for file_path in files:
+            try:
+                self._extract_router_includes(file_path)
+            except Exception as e:
+                self.errors.append(f"Error extracting router includes from {file_path}: {str(e)}")
+
+        # Pass 3: Extract routes from all files (now with prefix info)
+        all_routes = []
+        for file_path in files:
+            try:
+                routes = self.extract_routes_from_file(file_path)
+                all_routes.extend(routes)
+            except Exception as e:
+                self.errors.append(f"Error extracting from {file_path}: {str(e)}")
+
+        # Convert routes to endpoints
+        for route in all_routes:
+            try:
+                endpoints = self._route_to_endpoints(route)
+                self.endpoints.extend(endpoints)
+            except Exception as e:
+                self.errors.append(f"Error converting route to endpoint: {str(e)}")
+
+        # Determine success
+        success = len(self.endpoints) > 0 and len(self.errors) == 0
+
+        from api_extractor.core.models import ExtractionResult
+        return ExtractionResult(
+            success=success,
+            endpoints=self.endpoints,
+            errors=self.errors,
+            warnings=self.warnings,
+            frameworks_detected=[self.framework],
+        )
+
+    def _extract_router_definitions(self, file_path: str) -> None:
+        """
+        Extract APIRouter definitions and their prefixes from a file.
+
+        Parses patterns like:
+        router = APIRouter(prefix="/organizations")
+        organization_router = APIRouter(prefix="/orgs", tags=["orgs"])
+
+        Builds mapping of file paths to router variable names and prefixes.
+
+        Args:
+            file_path: Path to Python file
+        """
+        source_code = self._read_file(file_path)
+        if not source_code:
+            return
+
+        tree = self.parser.parse_source(source_code, "python")
+        if not tree:
+            return
+
+        # Query for router assignments: router = APIRouter(...)
+        router_query = """
+        (assignment
+          left: (identifier) @var_name
+          right: (call
+            function: (identifier) @func_name
+            arguments: (argument_list) @args))
+        """
+
+        matches = self.parser.query(tree, router_query, "python")
+
+        file_routers = {}
+        for match in matches:
+            var_name_node = match.get("var_name")
+            func_name_node = match.get("func_name")
+            args_node = match.get("args")
+
+            if not all([var_name_node, func_name_node, args_node]):
+                continue
+
+            func_name = self.parser.get_node_text(func_name_node, source_code)
+            if func_name != "APIRouter":
+                continue
+
+            var_name = self.parser.get_node_text(var_name_node, source_code)
+
+            # Extract prefix from arguments
+            prefix = self._extract_prefix_from_arguments(args_node, source_code)
+            if prefix:
+                file_routers[var_name] = prefix
+
+        if file_routers:
+            self.router_definitions[file_path] = file_routers
+
+    def _extract_prefix_from_arguments(self, args_node: Node, source_code: bytes) -> Optional[str]:
+        """
+        Extract prefix parameter from APIRouter arguments.
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+
+        Returns:
+            Prefix string or None
+        """
+        for child in args_node.children:
+            if child.type == "keyword_argument":
+                key_node = child.child_by_field_name("name")
+                value_node = child.child_by_field_name("value")
+
+                if key_node and value_node:
+                    key_text = self.parser.get_node_text(key_node, source_code)
+                    if key_text == "prefix":
+                        if value_node.type == "string":
+                            return self.parser.extract_string_value(value_node, source_code)
+
+        return None
+
+    def _extract_router_includes(self, file_path: str) -> None:
+        """
+        Extract router.include_router() calls to build inclusion hierarchy.
+
+        Parses patterns like:
+        router.include_router(organization_router)
+        app.include_router(router)
+
+        Builds mapping of parent prefixes to child routers.
+
+        Args:
+            file_path: Path to Python file
+        """
+        source_code = self._read_file(file_path)
+        if not source_code:
+            return
+
+        tree = self.parser.parse_source(source_code, "python")
+        if not tree:
+            return
+
+        # Query for include_router calls: router.include_router(other_router)
+        include_query = """
+        (expression_statement
+          (call
+            function: (attribute
+              object: (identifier) @parent_router
+              attribute: (identifier) @method_name)
+            arguments: (argument_list) @args))
+        """
+
+        matches = self.parser.query(tree, include_query, "python")
+
+        for match in matches:
+            parent_router_node = match.get("parent_router")
+            method_name_node = match.get("method_name")
+            args_node = match.get("args")
+
+            if not all([parent_router_node, method_name_node, args_node]):
+                continue
+
+            method_name = self.parser.get_node_text(method_name_node, source_code)
+            if method_name != "include_router":
+                continue
+
+            parent_router_name = self.parser.get_node_text(parent_router_node, source_code)
+
+            # Extract child router name from arguments
+            child_router_name = None
+            for child in args_node.children:
+                if child.type == "identifier":
+                    child_router_name = self.parser.get_node_text(child, source_code)
+                    break
+
+            if not child_router_name:
+                continue
+
+            # Look up parent router prefix in current file
+            parent_prefix = None
+            if file_path in self.router_definitions:
+                parent_prefix = self.router_definitions[file_path].get(parent_router_name)
+
+            # Store the relationship
+            if parent_prefix is not None:
+                if parent_prefix not in self.router_includes:
+                    self.router_includes[parent_prefix] = {}
+                self.router_includes[parent_prefix][child_router_name] = child_router_name
+
+    def _get_router_prefix_for_file(self, file_path: str) -> Optional[str]:
+        """
+        Get the complete URL prefix chain for routes in a given file.
+
+        Looks up router definition in the file, then composes with global prefix.
+
+        Args:
+            file_path: Absolute path to the file
+
+        Returns:
+            Full URL prefix (e.g., '/v1/organizations') or None
+        """
+        # Check if this is the main router file (api.py, main.py, app.py)
+        filename = file_path.split('/')[-1]
+        if filename in ('api.py', 'main.py', 'app.py'):
+            # Main router file only gets its own prefix (the global one)
+            if file_path in self.router_definitions:
+                file_routers = self.router_definitions[file_path]
+                if file_routers:
+                    return next(iter(file_routers.values()))
+            return None
+
+        # Check if this file has router definitions
+        if file_path not in self.router_definitions:
+            # No local router, apply only global prefix if available
+            return self.global_prefix
+
+        # Get the first router definition in the file
+        file_routers = self.router_definitions[file_path]
+        if not file_routers:
+            return self.global_prefix
+
+        local_prefix = next(iter(file_routers.values()))
+
+        # Compose global prefix + local prefix
+        if self.global_prefix:
+            # Ensure prefixes are properly formatted
+            global_part = self.global_prefix.rstrip("/")
+            local_part = local_prefix.rstrip("/")
+            if not global_part.startswith("/"):
+                global_part = "/" + global_part
+            if not local_part.startswith("/"):
+                local_part = "/" + local_part
+            return global_part + local_part
+
+        # No global prefix, just return local
+        return local_prefix
 
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
         """
@@ -120,12 +402,29 @@ class FastAPIExtractor(BaseExtractor):
             # Convert method name to HTTPMethod enum
             http_method = HTTPMethod[method_name.upper()]
 
+            # Apply router prefix if available
+            router_prefix = self._get_router_prefix_for_file(file_path)
+            full_path = path
+            if router_prefix:
+                # Ensure prefix starts with / and doesn't end with /
+                prefix = router_prefix.rstrip("/")
+                if not prefix.startswith("/"):
+                    prefix = "/" + prefix
+                # Ensure path starts with /
+                if not path.startswith("/"):
+                    path = "/" + path
+                full_path = prefix + path
+            else:
+                # Ensure path starts with /
+                if not path.startswith("/"):
+                    full_path = "/" + path
+
             route = Route(
-                path=path,
+                path=full_path,
                 methods=[http_method],
                 handler_name=func_name,
                 framework=self.framework,
-                raw_path=path,
+                raw_path=full_path,
                 source_file=file_path,
                 source_line=location["start_line"],
                 metadata=metadata,

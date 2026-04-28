@@ -16,7 +16,7 @@ class TestNextJSRealWorld:
     def test_calcom_extraction(self) -> None:
         """Test extraction from Cal.com (production Next.js app)."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "cal.com"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "nextjs", "cal.com"
         )
 
         # Skip if real-world fixture doesn't exist
@@ -65,7 +65,7 @@ class TestNextJSRealWorld:
     def test_dub_extraction(self) -> None:
         """Test extraction from Dub (production Next.js app with App Router)."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "dub"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "nextjs", "dub"
         )
 
         # Skip if real-world fixture doesn't exist
@@ -114,7 +114,7 @@ class TestNextJSRealWorld:
     def test_app_router_pattern_detection(self) -> None:
         """Verify App Router pattern detection in Dub."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "dub"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "nextjs", "dub"
         )
 
         if not os.path.exists(fixture_dir):
@@ -136,7 +136,7 @@ class TestNextJSRealWorld:
     def test_pages_router_pattern_detection(self) -> None:
         """Verify Pages Router pattern detection in Cal.com."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "cal.com"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "nextjs", "cal.com"
         )
 
         if not os.path.exists(fixture_dir):
@@ -157,7 +157,7 @@ class TestNextJSRealWorld:
     def test_mixed_router_support(self) -> None:
         """Verify both App Router and Pages Router are detected in Cal.com."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "cal.com"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "nextjs", "cal.com"
         )
 
         if not os.path.exists(fixture_dir):

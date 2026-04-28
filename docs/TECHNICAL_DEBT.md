@@ -20,10 +20,10 @@ This document tracks known issues, limitations, and future enhancements discover
 
 ## Active Issues
 
-### 1. FastAPI Router Prefix Composition ⏳ 🔴
+### 1. FastAPI Router Prefix Composition ✅ 🔴
 
 **Discovered:** 2026-04-28 during Polar repository analysis
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed (2026-04-28)
 **Priority:** 🔴 High
 
 #### Description
@@ -143,10 +143,10 @@ Current extractor may miss the `/api/v1` prefix depending on how routes are defi
 
 ---
 
-### 3. Next.js Wrapper Function Patterns ⏳ 🔴
+### 3. Next.js Wrapper Function Patterns ✅ 🔴
 
 **Discovered:** 2026-04-28 during Formbricks repository analysis
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed (2026-04-28)
 **Priority:** 🔴 High
 
 #### Description
@@ -276,6 +276,112 @@ Verify Spring Boot extractor handles all path variable patterns:
 ---
 
 ## Fixed Issues
+
+### ✅ ASP.NET Core Minimal API Support
+
+**Fixed:** 2026-04-28
+**Original Priority:** 🟡 Medium
+
+#### Description
+ASP.NET Core extractor only supported traditional Controller-based APIs. It did not support Minimal APIs introduced in .NET 6+, which use a different routing pattern with extension methods like `app.MapGet()`, `app.MapPost()`, `MapGroup()`, etc.
+
+**Supported patterns before:**
+- Controller classes with `[HttpGet]`, `[HttpPost]`, etc. attributes ✅
+
+**Not supported before:**
+- `app.MapGet("/items", handler)` ❌
+- `api.MapPost("/items", handler)` ❌
+- `MapGroup()` prefix composition ❌
+
+#### Solution Implemented
+Implemented 3-phase extraction in `api_extractor/extractors/csharp/aspnet_core.py`:
+1. **Phase 1:** `_extract_minimal_api_routes()` - Detects MapGet(), MapPost(), etc. method calls
+2. **Phase 2:** `_find_map_group_in_expression()` - Recursively searches for MapGroup() calls in variable assignments
+3. **Phase 3:** Composes full paths by combining MapGroup prefix with route path
+
+**Key Challenge:** MapGroup() calls can be chained (e.g., `.MapGroup("api/catalog").HasApiVersion(1, 0)`), requiring recursive expression traversal.
+
+**Before:** Only extracted controller endpoints (14 from Identity.API)
+**After:** Extracts both controller and Minimal API endpoints (44 total: 27 Minimal API + 17 Controller)
+
+#### Verified By
+- eShop (Microsoft's .NET reference app): 44 endpoints extracted
+  - Catalog.API: 16 Minimal API endpoints ✅
+  - Ordering.API: 7 Minimal API endpoints ✅
+  - Webhooks.API: 4 Minimal API endpoints ✅
+  - Identity.API: 17 Controller endpoints ✅
+- 12 new integration tests passing
+
+---
+
+## Fixed Issues
+
+### ✅ Next.js Wrapper Function Patterns
+
+**Fixed:** 2026-04-28
+**Original Priority:** 🔴 High
+
+#### Description
+Next.js extractor only detected direct async function exports, missing wrapper patterns used by most production apps.
+
+**Supported patterns before:**
+- `export const GET = async () => {...}` ✅
+- `export function GET() {...}` ✅
+
+**Not supported before:**
+- `export const GET = withAuth(async () => {...})` ❌
+- `export const POST = defaultResponderForAppDir(handler)` ❌
+- `export const GET = withWorkspace(async ({ params }) => {...})` ❌
+
+#### Solution Implemented
+Added third Tree-sitter query pattern to `api_extractor/extractors/javascript/nextjs.py`:
+
+```python
+export_wrapper_query = """
+(export_statement
+  (lexical_declaration
+    (variable_declarator
+      name: (identifier) @func_name
+      value: (call_expression))))
+"""
+```
+
+This detects wrapper function patterns where HTTP method exports are assigned to function call expressions.
+
+**Before:** Only direct async functions detected
+**After:** All wrapper patterns (HOCs, middleware wrappers, auth wrappers) detected
+
+#### Verified By
+- Dub: Increased from ~5 endpoints to 169 endpoints (33x improvement!)
+- Cal.com: Increased from ~5 endpoints to 44 endpoints (8x improvement!)
+- All Next.js integration tests passing
+
+---
+
+### ✅ FastAPI Router Prefix Composition
+
+**Fixed:** 2026-04-28
+**Original Priority:** 🔴 High
+
+#### Description
+FastAPI extractor did not detect or apply `APIRouter(prefix="...")` parameters. Extracted paths were relative to their router definition instead of absolute paths.
+
+#### Solution Implemented
+Implemented 3-phase extraction in `api_extractor/extractors/python/fastapi.py`:
+1. **Phase 1:** `_extract_router_definitions()` - Extracts `APIRouter(prefix="...")` from all files
+2. **Phase 2:** Detect global prefix from main aggregator files (`api.py`, `main.py`, `app.py`)
+3. **Phase 3:** `_get_router_prefix_for_file()` - Composes full path: global_prefix + local_prefix + route_path
+
+**Before:** `/{id}` (missing all prefixes)
+**After:** `/v1/organizations/{id}` (full prefix chain)
+
+#### Verified By
+- Polar (332 endpoints, 12 tests passing)
+- DocFlow (23 endpoints, 9 tests passing)
+- FastAPI Fullstack (23 endpoints, 5 tests passing)
+- All 290 integration tests passing
+
+---
 
 ### ✅ Flask-RESTX Namespace Support
 
