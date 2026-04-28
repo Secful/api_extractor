@@ -19,7 +19,7 @@ class TestFrameworkDetection:
     def test_detect_flask(self) -> None:
         """Test detection of Flask framework."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "flask-realworld"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "python", "flask", "flask-realworld"
         )
 
         if not os.path.exists(fixture_dir):
@@ -34,7 +34,7 @@ class TestFrameworkDetection:
     def test_detect_fastapi(self) -> None:
         """Test detection of FastAPI framework."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "fastapi-fullstack"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "python", "fastapi", "fastapi-fullstack"
         )
 
         if not os.path.exists(fixture_dir):
@@ -49,7 +49,7 @@ class TestFrameworkDetection:
     def test_detect_django_rest(self) -> None:
         """Test detection of Django REST Framework."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "django-rest-tutorial"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "python", "django", "django-rest-tutorial"
         )
 
         if not os.path.exists(fixture_dir):
@@ -66,7 +66,7 @@ class TestFrameworkDetection:
     def test_detect_express(self) -> None:
         """Test detection of Express framework."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "express-examples"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "express", "express-examples"
         )
 
         if not os.path.exists(fixture_dir):
@@ -81,7 +81,7 @@ class TestFrameworkDetection:
     def test_detect_nestjs(self) -> None:
         """Test detection of NestJS framework."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "nestjs-realworld"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "nestjs", "nestjs-realworld"
         )
 
         if not os.path.exists(fixture_dir):
@@ -96,7 +96,7 @@ class TestFrameworkDetection:
     def test_detect_fastify(self) -> None:
         """Test detection of Fastify framework."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "fastify-demo"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "fastify", "fastify-demo"
         )
 
         if not os.path.exists(fixture_dir):
@@ -247,7 +247,7 @@ class TestRealWorldDetection:
     def test_detect_nextjs_calcom(self) -> None:
         """Test detection on Cal.com (real-world Next.js)."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "cal.com"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "nextjs", "cal.com"
         )
 
         if not os.path.exists(fixture_dir):
@@ -262,7 +262,7 @@ class TestRealWorldDetection:
     def test_detect_nextjs_dub(self) -> None:
         """Test detection on Dub (real-world Next.js)."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "real-world", "dub"
+            os.path.dirname(__file__), "..", "fixtures", "real-world", "javascript", "nextjs", "dub"
         )
 
         if not os.path.exists(fixture_dir):
@@ -281,6 +281,8 @@ class TestRealWorldDetection:
             "..",
             "fixtures",
             "real-world",
+            "java",
+            "spring-boot",
             "spring-boot-realworld-example-app",
         )
 
