@@ -244,7 +244,7 @@ class TestNextJSExtractorIntegration:
 
     def test_extract_app_router_basic(self, extractor: NextJSExtractor, fixtures_dir: Path) -> None:
         """Test extraction from App Router basic endpoint."""
-        fixture_path = fixtures_dir / "nextjs-app" / "app" / "api" / "users" / "route.ts"
+        fixture_path = fixtures_dir / "javascript/nextjs/app" / "app" / "api" / "users" / "route.ts"
         if not fixture_path.exists():
             pytest.skip("Fixture file not found")
 
@@ -263,7 +263,7 @@ class TestNextJSExtractorIntegration:
     ) -> None:
         """Test extraction from App Router dynamic route."""
         fixture_path = (
-            fixtures_dir / "nextjs-app" / "app" / "api" / "users" / "[id]" / "route.ts"
+            fixtures_dir / "javascript/nextjs/app" / "app" / "api" / "users" / "[id]" / "route.ts"
         )
         if not fixture_path.exists():
             pytest.skip("Fixture file not found")
@@ -283,7 +283,7 @@ class TestNextJSExtractorIntegration:
         self, extractor: NextJSExtractor, fixtures_dir: Path
     ) -> None:
         """Test extraction from Pages Router basic endpoint."""
-        fixture_path = fixtures_dir / "nextjs-pages" / "pages" / "api" / "products.ts"
+        fixture_path = fixtures_dir / "javascript/nextjs/pages" / "pages" / "api" / "products.ts"
         if not fixture_path.exists():
             pytest.skip("Fixture file not found")
 
@@ -302,7 +302,7 @@ class TestNextJSExtractorIntegration:
     ) -> None:
         """Test extraction from Pages Router dynamic route."""
         fixture_path = (
-            fixtures_dir / "nextjs-pages" / "pages" / "api" / "products" / "[slug].ts"
+            fixtures_dir / "javascript/nextjs/pages" / "pages" / "api" / "products" / "[slug].ts"
         )
         if not fixture_path.exists():
             pytest.skip("Fixture file not found")
@@ -322,7 +322,7 @@ class TestNextJSExtractorIntegration:
         self, extractor: NextJSExtractor, fixtures_dir: Path
     ) -> None:
         """Test full extraction pipeline on App Router fixture."""
-        fixture_path = fixtures_dir / "nextjs-app"
+        fixture_path = fixtures_dir / "javascript/nextjs/app"
         if not fixture_path.exists():
             pytest.skip("Fixture directory not found")
 
@@ -341,7 +341,7 @@ class TestNextJSExtractorIntegration:
         self, extractor: NextJSExtractor, fixtures_dir: Path
     ) -> None:
         """Test full extraction pipeline on Pages Router fixture."""
-        fixture_path = fixtures_dir / "nextjs-pages"
+        fixture_path = fixtures_dir / "javascript/nextjs/pages"
         if not fixture_path.exists():
             pytest.skip("Fixture directory not found")
 

@@ -111,7 +111,7 @@ class TestFrameworkDetection:
     def test_detect_nextjs_app_router(self) -> None:
         """Test detection of Next.js (App Router) via directory structure."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "minimal", "nextjs-app"
+            os.path.dirname(__file__), "..", "fixtures", "minimal", "javascript/nextjs/app"
         )
 
         if not os.path.exists(fixture_dir):
@@ -126,7 +126,7 @@ class TestFrameworkDetection:
     def test_detect_nextjs_pages_router(self) -> None:
         """Test detection of Next.js (Pages Router) via directory structure."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "minimal", "nextjs-pages"
+            os.path.dirname(__file__), "..", "fixtures", "minimal", "javascript/nextjs/pages"
         )
 
         if not os.path.exists(fixture_dir):
@@ -142,7 +142,7 @@ class TestFrameworkDetection:
         """Test detection of Next.js via package.json dependency."""
         # Both app and pages router fixtures have package.json with next dependency
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "minimal", "nextjs-app"
+            os.path.dirname(__file__), "..", "fixtures", "minimal", "javascript/nextjs/app"
         )
 
         if not os.path.exists(fixture_dir):
@@ -227,7 +227,7 @@ class TestFrameworkDetection:
     def test_detection_via_directory_structure(self) -> None:
         """Test that detection works from directory structure (Next.js specific)."""
         fixture_dir = os.path.join(
-            os.path.dirname(__file__), "..", "fixtures", "minimal", "nextjs-app"
+            os.path.dirname(__file__), "..", "fixtures", "minimal", "javascript/nextjs/app"
         )
 
         if not os.path.exists(fixture_dir):
