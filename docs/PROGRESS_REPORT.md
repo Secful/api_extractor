@@ -138,7 +138,14 @@ export const POST = withApiWrapper({handler: ...})  ❌
 3. **Test Coverage** ✅
    - 195 integration test methods (141 new)
    - 2,178 endpoints validated
-   - All tests passing
+   - All tests passing (3 legitimate skips for large repos not cloned)
+
+4. **Test Path Fixes** ✅
+   - Fixed 6 framework detection test paths (Flask, FastAPI, Django, Express, NestJS, Fastify)
+   - Fixed ASP.NET Core fixture path to use nested csharp/aspnet-core structure (10 tests)
+   - Fixed Spring Boot RealWorld path by removing duplicate segments (7 tests)
+   - Result: 17 previously skipped tests now passing
+   - Only 3 legitimate skips remain (Cal.com, Dub - large repos not cloned)
 
 ---
 
