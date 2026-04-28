@@ -22,3 +22,6 @@
 [submodule "tests/fixtures/real-world/docflow"]
 	path = tests/fixtures/real-world/docflow
 	url = https://github.com/jiisanda/docflow.git
+[submodule "tests/fixtures/real-world/mentorship-backend"]
+	path = tests/fixtures/real-world/mentorship-backend
+	url = https://github.com/anitab-org/mentorship-backend.git
