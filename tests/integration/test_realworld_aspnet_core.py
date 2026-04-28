@@ -18,7 +18,7 @@ def extractor():
 @pytest.fixture
 def realworld_path():
     """Get path to ASP.NET Core RealWorld fixture."""
-    path = Path(__file__).parent.parent / "fixtures" / "real-world" / "aspnetcore-realworld-example-app"
+    path = Path(__file__).parent.parent / "fixtures" / "real-world" / "csharp" / "aspnet-core" / "aspnetcore-realworld-example-app"
     if not path.exists():
         pytest.skip("ASP.NET Core RealWorld fixture not found")
     return str(path)

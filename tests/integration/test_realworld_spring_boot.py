@@ -20,9 +20,7 @@ def spring_boot_realworld_path():
         "real-world",
         "java",
         "spring-boot",
-        "java",
-            "spring-boot",
-            "spring-boot-realworld-example-app",
+        "spring-boot-realworld-example-app",
     )
 
 
