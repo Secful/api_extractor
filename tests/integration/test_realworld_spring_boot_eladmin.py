@@ -18,6 +18,8 @@ def eladmin_path():
         "..",
         "fixtures",
         "real-world",
+        "java",
+        "spring-boot",
         "eladmin",
     )
     if not os.path.exists(path):

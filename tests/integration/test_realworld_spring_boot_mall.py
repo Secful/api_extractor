@@ -18,6 +18,8 @@ def mall_path():
         "..",
         "fixtures",
         "real-world",
+        "java",
+        "spring-boot",
         "mall",
     )
     if not os.path.exists(path):

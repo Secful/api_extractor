@@ -74,3 +74,18 @@ tests/fixtures/real-world/cal.com/
 tests/fixtures/real-world/dub/
 tests/fixtures/real-world/aspnetcore-realworld-example-app/
 tests/fixtures/real-world/spring-boot-realworld-example-app/
+
+# Additional real-world test fixtures (cloned repositories)
+tests/fixtures/real-world/java/spring-boot/eladmin/
+tests/fixtures/real-world/java/spring-boot/mall/
+tests/fixtures/real-world/javascript/nextjs/formbricks/
+tests/fixtures/real-world/javascript/express/hackathon-starter/
+tests/fixtures/real-world/javascript/express/realworld/
+tests/fixtures/real-world/javascript/fastify/daily-api/
+tests/fixtures/real-world/javascript/fastify/jwt-boilerplate/
+tests/fixtures/real-world/javascript/nestjs/ghostfolio/
+tests/fixtures/real-world/javascript/nestjs/realworld/
+tests/fixtures/real-world/python/django/netbox/
+tests/fixtures/real-world/python/django/wger/
+tests/fixtures/real-world/python/fastapi/polar/
+tests/fixtures/real-world/python/flask/flask-realworld-example-app/
