@@ -19,3 +19,6 @@
 [submodule "tests/fixtures/real-world/golang-gin-realworld-example-app"]
 	path = tests/fixtures/real-world/golang-gin-realworld-example-app
 	url = https://github.com/gothinkster/golang-gin-realworld-example-app.git
+[submodule "tests/fixtures/real-world/docflow"]
+	path = tests/fixtures/real-world/docflow
+	url = https://github.com/jiisanda/docflow.git
