@@ -113,7 +113,7 @@ class TestDjangoWger:
         exercise_paths = [p for p in paths if "exercise" in p.lower()]
 
         if len(exercise_paths) > 0:
-            assert len(exercise_paths) >= 10, \
+            assert len(exercise_paths) == 15, \
                 f"Should find multiple exercise endpoints, found {len(exercise_paths)}"
 
     def test_workout_endpoints(self, wger_path: str) -> None:
@@ -129,7 +129,7 @@ class TestDjangoWger:
         workout_paths = [p for p in paths if any(kw in p.lower() for kw in workout_keywords)]
 
         if len(workout_paths) > 0:
-            assert len(workout_paths) >= 5, \
+            assert len(workout_paths) == 17, \
                 f"Should find multiple workout endpoints, found {len(workout_paths)}"
 
     def test_nutrition_endpoints(self, wger_path: str) -> None:
@@ -145,7 +145,7 @@ class TestDjangoWger:
         nutrition_paths = [p for p in paths if any(kw in p.lower() for kw in nutrition_keywords)]
 
         if len(nutrition_paths) > 0:
-            assert len(nutrition_paths) >= 5, \
+            assert len(nutrition_paths) == 19, \
                 f"Should find multiple nutrition endpoints, found {len(nutrition_paths)}"
 
     def test_weight_tracking_endpoints(self, wger_path: str) -> None:
@@ -160,7 +160,7 @@ class TestDjangoWger:
         weight_paths = [p for p in paths if "weight" in p.lower()]
 
         if len(weight_paths) > 0:
-            assert len(weight_paths) >= 2, \
+            assert len(weight_paths) == 6, \
                 f"Should find weight tracking endpoints, found {len(weight_paths)}"
 
     def test_viewset_patterns(self, wger_path: str) -> None:
@@ -181,9 +181,9 @@ class TestDjangoWger:
         ]
 
         if len(result.endpoints) > 50:
-            assert len(list_endpoints) >= 15, \
+            assert len(list_endpoints) == 42, \
                 f"Should find multiple list endpoints, found {len(list_endpoints)}"
-            assert len(detail_endpoints) >= 40, \
+            assert len(detail_endpoints) == 120, \
                 f"Should find multiple detail endpoints, found {len(detail_endpoints)}"
 
     def test_multiple_domains(self, wger_path: str) -> None:
@@ -206,7 +206,7 @@ class TestDjangoWger:
 
         # Should find at least 3 different domains
         if len(paths) > 30:
-            assert len(domains_found) >= 3, \
+            assert len(domains_found) == 5, \
                 f"Should find endpoints from multiple domains, found: {domains_found}"
 
     def test_router_prefix_extraction(self, wger_path: str) -> None:

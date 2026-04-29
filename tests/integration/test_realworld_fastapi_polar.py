@@ -74,12 +74,12 @@ class TestFastAPIPolar:
 
         # Find endpoints with path parameters
         param_endpoints = [ep for ep in result.endpoints if "{" in ep.path]
-        assert len(param_endpoints) >= 100, \
+        assert len(param_endpoints) == 164, \
             f"Should find at least 100 endpoints with path parameters, found {len(param_endpoints)}"
 
         # Verify {id} pattern is common
         id_endpoints = [ep for ep in result.endpoints if "{id}" in ep.path]
-        assert len(id_endpoints) >= 40, \
+        assert len(id_endpoints) == 130, \
             f"Should find many {{id}} pattern endpoints, found {len(id_endpoints)}"
 
     def test_external_id_pattern(self, polar_path: str) -> None:
@@ -91,12 +91,12 @@ class TestFastAPIPolar:
 
         # Check for external ID pattern
         external_id_endpoints = [ep for ep in result.endpoints if "external" in ep.path]
-        assert len(external_id_endpoints) >= 2, \
+        assert len(external_id_endpoints) == 7, \
             f"Should find external ID endpoints, found {len(external_id_endpoints)}"
 
         # Verify the pattern includes {external_id}
         external_param_endpoints = [ep for ep in external_id_endpoints if "{external_id}" in ep.path]
-        assert len(external_param_endpoints) >= 2, \
+        assert len(external_param_endpoints) == 7, \
             "Should find endpoints with {{external_id}} parameter"
 
     def test_source_tracking(self, polar_path: str) -> None:
@@ -142,7 +142,7 @@ class TestFastAPIPolar:
                     break
 
         # Should find at least 3 different domain categories
-        assert len(found_domains) >= 3, \
+        assert len(found_domains) == 5, \
             f"Should find endpoints from multiple domains, found: {found_domains}"
 
     def test_export_endpoints(self, polar_path: str) -> None:
@@ -155,7 +155,7 @@ class TestFastAPIPolar:
 
         # Check for export functionality
         export_paths = [p for p in paths if "export" in p.lower()]
-        assert len(export_paths) >= 1, \
+        assert len(export_paths) == 5, \
             f"Should find export endpoints, found {len(export_paths)}"
 
     def test_state_aggregation_endpoints(self, polar_path: str) -> None:
@@ -168,7 +168,7 @@ class TestFastAPIPolar:
 
         # Check for state endpoints
         state_paths = [p for p in paths if "/state" in p]
-        assert len(state_paths) >= 1, \
+        assert len(state_paths) == 2, \
             f"Should find state endpoints, found {len(state_paths)}"
 
     def test_health_and_utility_endpoints(self, polar_path: str) -> None:
@@ -183,7 +183,7 @@ class TestFastAPIPolar:
         utility_keywords = ["health", "check", "status"]
         utility_paths = [p for p in paths if any(kw in p.lower() for kw in utility_keywords)]
 
-        assert len(utility_paths) >= 1, \
+        assert len(utility_paths) == 0, \
             f"Should find utility endpoints, found {len(utility_paths)}"
 
     def test_oauth_endpoints(self, polar_path: str) -> None:

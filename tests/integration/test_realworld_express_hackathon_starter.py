@@ -221,7 +221,7 @@ class TestExpressHackathonStarter:
 
         # Find password reset endpoints
         reset_endpoints = [ep for ep in result.endpoints if "reset" in ep.path or "forgot" in ep.path]
-        assert len(reset_endpoints) >= 3, \
+        assert len(reset_endpoints) == 5, \
             f"Expected at least 3 password reset endpoints, found {len(reset_endpoints)}"
 
     def test_contact_endpoints(self, hackathon_starter_path: str) -> None:
@@ -273,5 +273,5 @@ class TestExpressHackathonStarter:
 
         # Find upload endpoints
         upload_endpoints = [ep for ep in result.endpoints if "upload" in ep.path]
-        assert len(upload_endpoints) >= 1, \
+        assert len(upload_endpoints) == 2, \
             f"Expected at least 1 upload endpoint, found {len(upload_endpoints)}"

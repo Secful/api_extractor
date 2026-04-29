@@ -105,7 +105,7 @@ class TestFastAPIDocFlow:
             keyword in p.lower()
             for keyword in ["upload", "document", "share", "archive", "trash"]
         )]
-        assert len(doc_related) >= 10, \
+        assert len(doc_related) == 11, \
             f"Expected at least 10 document-related paths, found {len(doc_related)}"
 
     def test_file_operations(self, docflow_path: str) -> None:

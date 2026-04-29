@@ -115,7 +115,7 @@ class TestDjangoNetBox:
         dcim_paths = [p for p in paths if "/dcim/" in p.lower()]
 
         if len(dcim_paths) > 0:
-            assert len(dcim_paths) >= 5, \
+            assert len(dcim_paths) == 89, \
                 f"Should find multiple DCIM endpoints, found {len(dcim_paths)}"
 
     def test_ipam_endpoints(self, netbox_path: str) -> None:
@@ -130,7 +130,7 @@ class TestDjangoNetBox:
         ipam_paths = [p for p in paths if "/ipam/" in p.lower()]
 
         if len(ipam_paths) > 0:
-            assert len(ipam_paths) >= 5, \
+            assert len(ipam_paths) == 37, \
                 f"Should find multiple IPAM endpoints, found {len(ipam_paths)}"
 
     def test_viewset_patterns(self, netbox_path: str) -> None:
@@ -151,9 +151,9 @@ class TestDjangoNetBox:
         ]
 
         if len(result.endpoints) > 20:
-            assert len(list_endpoints) >= 5, \
+            assert len(list_endpoints) == 136, \
                 f"Should find multiple list endpoints, found {len(list_endpoints)}"
-            assert len(detail_endpoints) >= 10, \
+            assert len(detail_endpoints) == 510, \
                 f"Should find multiple detail endpoints, found {len(detail_endpoints)}"
 
     def test_multiple_django_apps(self, netbox_path: str) -> None:
@@ -176,7 +176,7 @@ class TestDjangoNetBox:
 
         # Should find at least 2 different Django apps
         if len(paths) > 20:
-            assert len(apps_found) >= 2, \
+            assert len(apps_found) == 5, \
                 f"Should find endpoints from multiple apps, found: {apps_found}"
 
     def test_devices_endpoints(self, netbox_path: str) -> None:
