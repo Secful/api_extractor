@@ -14,7 +14,7 @@ from api_extractor.extractors.javascript.nestjs import NestJSExtractor
 def ghostfolio_path():
     """Get path to Ghostfolio fixture (monorepo /apps/api directory)."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     # Security settings
     max_path_depth: int = 10
     allowed_path_prefixes: List[str] = []
-    enable_s3: bool = True
 
     # Rate limiting
     rate_limit_enabled: bool = False

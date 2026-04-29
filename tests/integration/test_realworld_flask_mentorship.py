@@ -25,7 +25,7 @@ from api_extractor.extractors.python.flask import FlaskExtractor
 def mentorship_path():
     """Get path to Mentorship Backend real-world fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

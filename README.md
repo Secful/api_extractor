@@ -7,7 +7,6 @@ Automatically extract REST API definitions from source code and generate OpenAPI
 - **Automatic Framework Detection**: Detects web frameworks in your codebase
 - **Multi-Language Support**: Supports Python (FastAPI, Flask, Django REST), JavaScript/TypeScript (Express, NestJS, Fastify, Next.js), Java (Spring Boot), C# (ASP.NET Core), and Go (Gin)
 - **OpenAPI 3.1 Output**: Generates standard OpenAPI specifications in JSON or YAML
-- **S3 Support**: Can analyze code from S3 buckets
 - **Tree-sitter Based**: Uses Tree-sitter Query Language for accurate AST parsing and pattern matching
 - **Production Validated**: Tested against real-world projects including Cal.com (Next.js), Dub (Next.js), Spring Boot RealWorld, ASP.NET Core RealWorld, Gin RealWorld, truthy (NestJS), and Postman tutorial patterns
 - **Comprehensive Coverage**: Extracts paths, methods, parameters, request bodies, and type information
@@ -41,14 +40,6 @@ Generate YAML output:
 
 ```bash
 api-extractor extract /path/to/project --output api-spec.yaml --format yaml
-```
-
-### S3 Source
-
-Extract from S3:
-
-```bash
-api-extractor extract s3://my-bucket/code/ --s3 --output openapi.json
 ```
 
 ### Verbose Output
@@ -85,7 +76,7 @@ api-extractor extract <PATH> [OPTIONS]
 
 ### Arguments
 
-- `PATH` - Path to codebase (local directory or S3 URI with `--s3` flag)
+- `PATH` - Path to local codebase directory
 
 ### Options
 
@@ -93,7 +84,6 @@ api-extractor extract <PATH> [OPTIONS]
 |--------|-------|------|---------|-------------|
 | `--output` | `-o` | path | `openapi.json` | Output file path |
 | `--format` | `-f` | choice | `json` | Output format (`json` or `yaml`) |
-| `--s3` | - | flag | false | Treat path as S3 URI |
 | `--verbose` | `-v` | flag | false | Show detailed extraction progress |
 | `--title` | - | string | `Extracted API` | API title in OpenAPI spec |
 | `--version` | - | string | `1.0.0` | API version in OpenAPI spec |
@@ -384,7 +374,7 @@ async def create_user(user: UserCreate) -> User:
 
 - `0` - Success
 - `1` - Framework detection failed (no frameworks found)
-- `2` - Invalid input (path not found, invalid S3 URI, etc.)
+- `2` - Invalid input (path not found, invalid arguments, etc.)
 - `3` - Extraction error (parse failures, no endpoints found, etc.)
 
 ### Examples
@@ -404,13 +394,6 @@ api-extractor extract . \
   --title "My API" \
   --version "2.0.0" \
   --verbose
-```
-
-**S3 source:**
-```bash
-api-extractor extract s3://my-bucket/code/ \
-  --s3 \
-  --output openapi.json
 ```
 
 #### Framework-Specific Examples
@@ -620,7 +603,6 @@ Get information about service capabilities and supported frameworks.
   "version": "0.1.0",
   "supported_frameworks": ["fastapi", "flask", "django_rest", "express", "nestjs", "fastify", "spring_boot"],
   "features": {
-    "s3_support": true,
     "auto_detection": true,
     "multiple_frameworks": true
   }
@@ -636,7 +618,7 @@ The primary endpoint for extracting REST API definitions from source code and ge
 - **Automatic Framework Detection**: Detects Python (FastAPI, Flask, Django REST), JavaScript/TypeScript (Express, NestJS, Fastify, Next.js), Java (Spring Boot), C# (ASP.NET Core), and Go (Gin)
 - **Multi-Framework Support**: Handles codebases with multiple frameworks
 - **OpenAPI 3.1 Output**: Returns standard-compliant OpenAPI specifications
-- **Local & S3 Sources**: Analyzes code from local filesystem or S3 buckets
+- **Local Sources**: Analyzes code from local filesystem
 - **Rich Metadata**: Provides extraction statistics, detected frameworks, warnings, and errors
 - **Path Security**: Validates paths to prevent directory traversal and unauthorized access
 
@@ -644,7 +626,6 @@ The primary endpoint for extracting REST API definitions from source code and ge
 ```json
 {
   "path": "/app/code",
-  "s3": false,
   "title": "My API",
   "version": "1.0.0",
   "description": "My REST API Documentation"
@@ -655,8 +636,7 @@ The primary endpoint for extracting REST API definitions from source code and ge
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `path` | string | Yes | - | Path to codebase (local directory or S3 URI like `s3://bucket/prefix/`) |
-| `s3` | boolean | No | `false` | Whether path is an S3 URI. Set to `true` when analyzing from S3 |
+| `path` | string | Yes | - | Path to local codebase directory |
 | `title` | string | No | `"Extracted API"` | API title that appears in the OpenAPI `info.title` field |
 | `version` | string | No | `"1.0.0"` | API version that appears in the OpenAPI `info.version` field |
 | `description` | string | No | `null` | API description that appears in the OpenAPI `info.description` field |
@@ -707,7 +687,6 @@ The primary endpoint for extracting REST API definitions from source code and ge
   "warnings": ["No type hints found for parameter 'query' in function 'search_users'"],
   "metadata": {
     "source_path": "/app/code",
-    "is_s3": false,
     "frameworks_used": ["fastapi"],
     "total_files_scanned": 12,
     "extraction_time_ms": 234
@@ -731,7 +710,7 @@ The primary endpoint for extracting REST API definitions from source code and ge
 
 | Status Code | Description | Example |
 |-------------|-------------|---------|
-| **400 Bad Request** | Invalid request parameters | Path is empty, invalid S3 URI format |
+| **400 Bad Request** | Invalid request parameters | Path is empty or invalid |
 | **403 Forbidden** | Path security violation | Path contains `..`, targets system directories, or violates whitelist |
 | **404 Not Found** | Path does not exist (local only) | Directory not found at specified path |
 | **422 Validation Error** | Request schema validation failed | Missing required field, wrong type |
@@ -811,8 +790,7 @@ Interactive API documentation is automatically generated and available at:
 curl -X POST http://localhost:8000/api/v1/analyze \
   -H "Content-Type: application/json" \
   -d '{
-    "path": "/path/to/code",
-    "s3": false
+    "path": "/path/to/code"
   }'
 
 # Health check
@@ -1057,7 +1035,6 @@ Configuration can be set via environment variables:
 | `API_EXTRACTOR_PORT` | `8000` | Server port |
 | `API_EXTRACTOR_LOG_LEVEL` | `info` | Logging level |
 | `API_EXTRACTOR_ALLOWED_PATH_PREFIXES` | (empty) | Comma-separated whitelist of allowed path prefixes |
-| `API_EXTRACTOR_ENABLE_S3` | `true` | Enable S3 support |
 
 **Example with environment variables:**
 ```bash
@@ -1075,7 +1052,6 @@ The HTTP server includes several security features:
 1. **Path Traversal Prevention** - Blocks paths containing `..` or `~`
 2. **System Directory Protection** - Forbidden: `/etc`, `/usr`, `/bin`, `/sbin`, `/root`, `/boot`, `/sys`, `/proc`, `/dev`
 3. **Path Whitelist** - Optional whitelist of allowed path prefixes via `API_EXTRACTOR_ALLOWED_PATH_PREFIXES`
-4. **S3 URI Validation** - Ensures S3 paths start with `s3://` and have valid format
 
 **Example security configuration:**
 ```bash
@@ -1153,11 +1129,6 @@ environment:
   - API_EXTRACTOR_PORT=8000
   - API_EXTRACTOR_LOG_LEVEL=info
   - API_EXTRACTOR_ALLOWED_PATH_PREFIXES=/app/code,/tmp
-  - API_EXTRACTOR_ENABLE_S3=true
-  # Optional: AWS credentials for S3
-  - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-  - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-  - AWS_DEFAULT_REGION=us-east-1
 ```
 
 ### Kubernetes Deployment
@@ -1430,8 +1401,7 @@ api_extractor/
 │   └── java/
 │       └── spring_boot.py # Spring Boot extractor
 ├── input_handlers/
-│   ├── local.py           # Local filesystem handler
-│   └── s3.py              # S3 handler
+│   └── local.py           # Local filesystem handler
 ├── openapi/
 │   ├── models.py          # OpenAPI models
 │   └── builder.py         # OpenAPI spec builder

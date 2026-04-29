@@ -47,7 +47,6 @@ def service_info() -> InfoResponse:
         version=settings.api_version,
         supported_frameworks=[f.value for f in FrameworkType],
         features={
-            "s3_support": settings.enable_s3,
             "auto_detection": True,
             "multiple_frameworks": True,
         },
@@ -72,27 +71,19 @@ def analyze_codebase(request: AnalyzeRequest) -> AnalyzeResponse:
     """
     Analyze codebase and extract API definitions.
 
-    This endpoint accepts a path to source code (local or S3) and extracts
+    This endpoint accepts a path to local source code and extracts
     REST API definitions, generating an OpenAPI specification.
     """
     settings = get_settings()
 
     try:
         # Security validation
-        logger.info(f"Analyzing path: {request.path}, S3: {request.s3}")
-
-        # Check if S3 is enabled
-        if request.s3 and not settings.enable_s3:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="S3 support is disabled",
-            )
+        logger.info(f"Analyzing path: {request.path}")
 
         # Validate path
         try:
             validate_path(
                 request.path,
-                request.s3,
                 settings.allowed_path_prefixes if settings.allowed_path_prefixes else None,
             )
         except PermissionError as e:
@@ -108,29 +99,27 @@ def analyze_codebase(request: AnalyzeRequest) -> AnalyzeResponse:
                 detail=str(e),
             )
 
-        # Check if path exists (local only)
-        if not request.s3:
-            try:
-                check_path_exists(request.path, request.s3)
-            except FileNotFoundError as e:
-                logger.warning(f"Path not found: {request.path}")
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=str(e),
-                )
-            except ValueError as e:
-                logger.warning(f"Invalid path: {request.path}")
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=str(e),
-                )
+        # Check if path exists
+        try:
+            check_path_exists(request.path)
+        except FileNotFoundError as e:
+            logger.warning(f"Path not found: {request.path}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(e),
+            )
+        except ValueError as e:
+            logger.warning(f"Invalid path: {request.path}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
 
         # Perform extraction
         service = ExtractionService()
         result = service.extract_api(
             path=request.path,
             frameworks=None,
-            s3=request.s3,
             title=request.title,
             version=request.version,
             description=request.description,

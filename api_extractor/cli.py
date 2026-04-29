@@ -32,11 +32,6 @@ def cli():
     help="Output format (default: json)",
 )
 @click.option(
-    "--s3",
-    is_flag=True,
-    help="Treat path as S3 URI (s3://bucket/path/)",
-)
-@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -64,7 +59,6 @@ def extract(
     path: str,
     output: str,
     format: str,
-    s3: bool,
     verbose: bool,
     title: str,
     version: str,
@@ -73,7 +67,7 @@ def extract(
     """
     Extract API definitions from source code.
 
-    PATH: Path to codebase (local directory or S3 URI with --s3 flag)
+    PATH: Path to local codebase directory
     """
     try:
         # Use extraction service
@@ -84,7 +78,6 @@ def extract(
         result = service.extract_api(
             path=path,
             frameworks=None,
-            s3=s3,
             title=title,
             version=version,
             description=description,

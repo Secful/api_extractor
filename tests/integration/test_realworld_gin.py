@@ -13,7 +13,7 @@ from api_extractor.core.models import HTTPMethod
 @pytest.mark.skipif(
     not os.path.exists(
         os.path.join(
-            os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
             "..",
             "fixtures",
             "real-world",
@@ -28,7 +28,7 @@ def test_realworld_extraction():
     """Test extraction from RealWorld Gin app."""
     # Get fixture path
     fixture_path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -44,14 +44,13 @@ def test_realworld_extraction():
     # Check that we found endpoints
     assert result.success
     # RealWorld Conduit API typically has 25-30 endpoints
-    assert len(result.endpoints) >= 20
-    assert len(result.endpoints) <= 35
-
+    assert len(result.endpoints) == 27
+    
 
 @pytest.mark.skipif(
     not os.path.exists(
         os.path.join(
-            os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
             "..",
             "fixtures",
             "real-world",
@@ -65,7 +64,7 @@ def test_realworld_extraction():
 def test_realworld_standard_paths():
     """Test that standard RealWorld paths are extracted."""
     fixture_path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -100,7 +99,7 @@ def test_realworld_standard_paths():
 @pytest.mark.skipif(
     not os.path.exists(
         os.path.join(
-            os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
             "..",
             "fixtures",
             "real-world",
@@ -114,7 +113,7 @@ def test_realworld_standard_paths():
 def test_realworld_http_methods():
     """Test that various HTTP methods are detected."""
     fixture_path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -140,7 +139,7 @@ def test_realworld_http_methods():
 @pytest.mark.skipif(
     not os.path.exists(
         os.path.join(
-            os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
             "..",
             "fixtures",
             "real-world",
@@ -154,7 +153,7 @@ def test_realworld_http_methods():
 def test_realworld_path_parameters():
     """Test that path parameters are properly extracted."""
     fixture_path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -185,7 +184,7 @@ def test_realworld_path_parameters():
 @pytest.mark.skipif(
     not os.path.exists(
         os.path.join(
-            os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
             "..",
             "fixtures",
             "real-world",
@@ -199,7 +198,7 @@ def test_realworld_path_parameters():
 def test_realworld_source_tracking():
     """Test that source files and line numbers are tracked."""
     fixture_path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -224,7 +223,7 @@ def test_realworld_source_tracking():
 @pytest.mark.skipif(
     not os.path.exists(
         os.path.join(
-            os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
             "..",
             "fixtures",
             "real-world",
@@ -238,7 +237,7 @@ def test_realworld_source_tracking():
 def test_realworld_file_structure():
     """Test that routes are found in expected files."""
     fixture_path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -264,7 +263,7 @@ def test_realworld_file_structure():
 @pytest.mark.skipif(
     not os.path.exists(
         os.path.join(
-            os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
             "..",
             "fixtures",
             "real-world",
@@ -278,7 +277,7 @@ def test_realworld_file_structure():
 def test_realworld_route_groups():
     """Test that route groups and prefixes are properly applied."""
     fixture_path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -310,7 +309,7 @@ def test_realworld_route_groups():
 @pytest.mark.skipif(
     not os.path.exists(
         os.path.join(
-            os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
             "..",
             "fixtures",
             "real-world",
@@ -324,7 +323,7 @@ def test_realworld_route_groups():
 def test_realworld_no_duplicate_paths():
     """Test that there are no excessive duplicate path+method combinations."""
     fixture_path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

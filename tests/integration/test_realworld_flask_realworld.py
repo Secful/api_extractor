@@ -14,7 +14,7 @@ from api_extractor.extractors.python.flask import FlaskExtractor
 def flask_realworld_path():
     """Get path to Flask RealWorld Example App fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

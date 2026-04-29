@@ -10,7 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def flask_realworld_path():
     """Get path to flask-realworld real-world fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -44,15 +44,15 @@ def test_flask_realworld_extraction(flask_realworld_path):
     paths = {(ep.path, ep.method): ep for ep in result.endpoints}
 
     # Should have found a reasonable number of endpoints
-    assert len(result.endpoints) >= 15, f"Expected at least 15 endpoints, found {len(result.endpoints)}"
+    assert len(result.endpoints) == 23
 
     # User authentication endpoints
     user_endpoints = [ep for ep in result.endpoints if "user" in ep.path.lower()]
-    assert len(user_endpoints) >= 3, f"Should find user endpoints, found {len(user_endpoints)}"
+    assert len(user_endpoints) == 3
 
     # Article endpoints (core functionality)
     article_endpoints = [ep for ep in result.endpoints if "article" in ep.path.lower()]
-    assert len(article_endpoints) >= 5, f"Should find article endpoints, found {len(article_endpoints)}"
+    assert len(article_endpoints) == 12
 
     # Check for HTTP methods on articles
     article_methods = {ep.method for ep in article_endpoints}
@@ -77,7 +77,7 @@ def test_flask_realworld_blueprint_structure(flask_realworld_path):
     files = {ep.source_file for ep in result.endpoints}
 
     # Should find routes from multiple files (modular architecture)
-    assert len(files) >= 3, f"Should find routes from multiple Blueprint files, found {len(files)}"
+    assert len(files) == 5
 
 
 def test_flask_realworld_path_parameters(flask_realworld_path):

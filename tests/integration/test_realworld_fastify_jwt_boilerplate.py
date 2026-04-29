@@ -14,7 +14,7 @@ from api_extractor.extractors.javascript.fastify import FastifyExtractor
 def jwt_boilerplate_path():
     """Get path to fastify-api-boilerplate-jwt fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

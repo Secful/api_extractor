@@ -14,7 +14,7 @@ from api_extractor.extractors.python.django_rest import DjangoRESTExtractor
 def wger_path():
     """Get path to wger real-world fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

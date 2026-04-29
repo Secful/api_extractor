@@ -14,7 +14,7 @@ from api_extractor.extractors.javascript.fastify import FastifyExtractor
 def daily_api_path():
     """Get path to daily-api fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

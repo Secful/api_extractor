@@ -14,7 +14,7 @@ from api_extractor.extractors.javascript.express import ExpressExtractor
 def hackathon_starter_path():
     """Get path to hackathon-starter fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

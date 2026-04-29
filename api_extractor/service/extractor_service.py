@@ -8,7 +8,6 @@ from api_extractor.core.detector import FrameworkDetector
 from api_extractor.core.models import FrameworkType
 from api_extractor.openapi.builder import OpenAPIBuilder
 from api_extractor.input_handlers.local import LocalHandler
-from api_extractor.input_handlers.s3 import S3Handler
 from api_extractor.service.models import ExtractionServiceResult
 
 logger = logging.getLogger(__name__)
@@ -65,7 +64,6 @@ class ExtractionService:
         self,
         path: str,
         frameworks: Optional[List[FrameworkType]] = None,
-        s3: bool = False,
         title: str = "Extracted API",
         version: str = "1.0.0",
         description: Optional[str] = None,
@@ -74,9 +72,8 @@ class ExtractionService:
         Extract API definitions from source code.
 
         Args:
-            path: Path to codebase (local directory or S3 URI)
+            path: Path to local codebase directory
             frameworks: List of frameworks to extract from (None for auto-detect)
-            s3: Whether path is an S3 URI
             title: API title for OpenAPI spec
             version: API version for OpenAPI spec
             description: API description for OpenAPI spec
@@ -88,20 +85,13 @@ class ExtractionService:
         handler = None
 
         try:
-            # Determine input handler
-            if s3:
-                handler = S3Handler()
-                logger.info("Using S3 handler")
-            else:
-                handler = LocalHandler()
-                logger.info("Using local filesystem handler")
+            # Use local filesystem handler
+            handler = LocalHandler()
+            logger.info("Using local filesystem handler")
 
             # Validate source
             if not handler.is_valid_source(path):
-                if s3:
-                    result.errors.append(f"Invalid S3 URI: {path}")
-                else:
-                    result.errors.append(f"Path not found or not a directory: {path}")
+                result.errors.append(f"Path not found or not a directory: {path}")
                 return result
 
             # Get local path
@@ -180,7 +170,6 @@ class ExtractionService:
             # Add metadata
             result.metadata = {
                 "source_path": path,
-                "is_s3": s3,
                 "frameworks_used": [f.value for f in detected_frameworks],
             }
 

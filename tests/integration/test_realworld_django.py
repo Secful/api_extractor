@@ -12,7 +12,7 @@ def django_tutorial_path():
     # Point to the root of the project, not just the tutorial directory
     # The ViewSets are in the snippets app at the root level
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -45,15 +45,15 @@ def test_django_tutorial_extraction(django_tutorial_path):
     paths = {(ep.path, ep.method): ep for ep in result.endpoints}
 
     # Should have found a reasonable number of endpoints
-    assert len(result.endpoints) >= 8, f"Expected at least 8 endpoints, found {len(result.endpoints)}"
+    assert len(result.endpoints) == 9
 
     # Snippet endpoints (core functionality)
     snippet_endpoints = [ep for ep in result.endpoints if "snippet" in ep.path.lower()]
-    assert len(snippet_endpoints) >= 4, f"Should find snippet endpoints, found {len(snippet_endpoints)}"
+    assert len(snippet_endpoints) == 7
 
     # User endpoints
     user_endpoints = [ep for ep in result.endpoints if "user" in ep.path.lower()]
-    assert len(user_endpoints) >= 2, f"Should find user endpoints, found {len(user_endpoints)}"
+    assert len(user_endpoints) == 2
 
     # Check for HTTP methods on snippets
     snippet_methods = {ep.method for ep in snippet_endpoints}
@@ -77,7 +77,7 @@ def test_django_tutorial_viewset_patterns(django_tutorial_path):
     files = {ep.source_file for ep in result.endpoints}
 
     # Should find routes from multiple files
-    assert len(files) >= 1, f"Should find routes from ViewSet files, found {len(files)}"
+    assert len(files) == 1
 
     # Check for standard ViewSet actions
     methods = {ep.method for ep in result.endpoints}

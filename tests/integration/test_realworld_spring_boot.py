@@ -14,7 +14,7 @@ from api_extractor.extractors.java.spring_boot import SpringBootExtractor
 def spring_boot_realworld_path():
     """Get path to Spring Boot RealWorld fixture."""
     return os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

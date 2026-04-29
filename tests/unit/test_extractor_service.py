@@ -34,7 +34,7 @@ def test_service_extract_fastapi_success(service, minimal_fastapi_path):
     assert result.endpoints_count > 0
     assert FrameworkType.FASTAPI in result.frameworks_detected
     assert result.metadata["source_path"] == minimal_fastapi_path
-    assert result.metadata["is_s3"] is False
+    assert "is_s3" not in result.metadata
 
 
 def test_service_extract_auto_detection(service, minimal_fastapi_path):

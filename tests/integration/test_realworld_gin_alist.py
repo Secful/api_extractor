@@ -14,7 +14,7 @@ from api_extractor.extractors.go.gin import GinExtractor
 def alist_path() -> str:
     """Get path to Alist real-world fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

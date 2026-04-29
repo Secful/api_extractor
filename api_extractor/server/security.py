@@ -25,35 +25,18 @@ FORBIDDEN_DIRECTORIES = {
 }
 
 
-def validate_path(path: str, is_s3: bool, allowed_prefixes: List[str] = None) -> None:
+def validate_path(path: str, allowed_prefixes: List[str] = None) -> None:
     """
     Validate path for security.
 
     Args:
-        path: Path to validate
-        is_s3: Whether path is an S3 URI
+        path: Local path to validate
         allowed_prefixes: List of allowed path prefixes (whitelist)
 
     Raises:
         PermissionError: If path is forbidden
         ValueError: If path is invalid
     """
-    if is_s3:
-        # Validate S3 URI
-        if not path.startswith("s3://"):
-            raise ValueError("S3 path must start with 's3://'")
-
-        # Basic S3 URI format validation
-        if len(path) < 6:  # s3://x
-            raise ValueError("Invalid S3 URI format")
-
-        # Extract bucket and key
-        s3_path = path[5:]  # Remove 's3://'
-        if "/" not in s3_path and not s3_path:
-            raise ValueError("Invalid S3 URI format: missing bucket name")
-
-        return
-
     # Local path validation
     # Check for path traversal attempts
     if ".." in path or "~" in path:
@@ -98,21 +81,17 @@ def validate_path(path: str, is_s3: bool, allowed_prefixes: List[str] = None) ->
             raise PermissionError(f"Access to system directory '{forbidden}' is forbidden")
 
 
-def check_path_exists(path: str, is_s3: bool) -> None:
+def check_path_exists(path: str) -> None:
     """
-    Check if path exists (for local paths only).
+    Check if local path exists.
 
     Args:
-        path: Path to check
-        is_s3: Whether path is an S3 URI
+        path: Local path to check
 
     Raises:
-        FileNotFoundError: If local path doesn't exist
+        FileNotFoundError: If path doesn't exist
+        ValueError: If path is not a directory
     """
-    if is_s3:
-        # S3 existence will be checked by S3Handler
-        return
-
     path_obj = Path(path)
     if not path_obj.exists():
         raise FileNotFoundError(f"Path not found: {path}")

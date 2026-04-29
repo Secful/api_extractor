@@ -18,7 +18,7 @@ from api_extractor.extractors.csharp.aspnet_core import ASPNETCoreExtractor
 def eshop_path() -> str:
     """Get path to eShop real-world fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

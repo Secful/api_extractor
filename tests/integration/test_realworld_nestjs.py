@@ -10,7 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def nestjs_realworld_path():
     """Get path to nestjs-realworld real-world fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -44,15 +44,15 @@ def test_nestjs_realworld_extraction(nestjs_realworld_path):
     paths = {(ep.path, ep.method): ep for ep in result.endpoints}
 
     # Should have found a reasonable number of endpoints
-    assert len(result.endpoints) >= 15, f"Expected at least 15 endpoints, found {len(result.endpoints)}"
+    assert len(result.endpoints) == 21
 
     # User/authentication endpoints
     user_endpoints = [ep for ep in result.endpoints if "user" in ep.path.lower()]
-    assert len(user_endpoints) >= 2, f"Should find user endpoints, found {len(user_endpoints)}"
+    assert len(user_endpoints) == 2
 
     # Article endpoints (core functionality)
     article_endpoints = [ep for ep in result.endpoints if "article" in ep.path.lower()]
-    assert len(article_endpoints) >= 5, f"Should find article endpoints, found {len(article_endpoints)}"
+    assert len(article_endpoints) == 11
 
     # Check for HTTP methods on articles
     article_methods = {ep.method for ep in article_endpoints}
@@ -76,12 +76,12 @@ def test_nestjs_realworld_controller_structure(nestjs_realworld_path):
     files = {ep.source_file for ep in result.endpoints}
 
     # Should find routes from multiple controller files (modular architecture)
-    assert len(files) >= 3, f"Should find routes from multiple Controller files, found {len(files)}"
+    assert len(files) == 5
 
     # Check for expected controller files
     source_files = [os.path.basename(f) for f in files]
     controller_files = [f for f in source_files if "controller" in f.lower()]
-    assert len(controller_files) >= 1, "Should find at least one controller file"
+    assert len(controller_files) == 5
 
 
 def test_nestjs_realworld_path_parameters(nestjs_realworld_path):
@@ -122,7 +122,7 @@ def test_nestjs_realworld_decorator_patterns(nestjs_realworld_path):
     # NestJS uses decorators like @Get(), @Post(), @Controller()
     # Verify we extracted endpoints with proper HTTP methods
     methods = {ep.method for ep in result.endpoints}
-    assert len(methods) >= 3, f"Should find multiple HTTP methods from decorators, found {len(methods)}"
+    assert len(methods) == 4
 
     # Check for @Controller prefix composition
     # Endpoints should have combined paths from @Controller() and method decorators

@@ -14,7 +14,7 @@ from api_extractor.extractors.java.spring_boot import SpringBootExtractor
 def eladmin_path():
     """Get path to eladmin fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

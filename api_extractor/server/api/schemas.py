@@ -7,8 +7,7 @@ from pydantic import BaseModel, Field
 class AnalyzeRequest(BaseModel):
     """Request schema for analyze endpoint."""
 
-    path: str = Field(..., description="Path to codebase (local directory or S3 URI)")
-    s3: bool = Field(False, description="Whether path is an S3 URI")
+    path: str = Field(..., description="Path to local codebase directory")
     title: str = Field("Extracted API", description="API title for OpenAPI spec")
     version: str = Field("1.0.0", description="API version for OpenAPI spec")
     description: Optional[str] = Field(None, description="API description for OpenAPI spec")
@@ -17,7 +16,6 @@ class AnalyzeRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "path": "/app/code",
-                "s3": False,
                 "title": "My API",
                 "version": "1.0.0",
                 "description": "My REST API",
@@ -45,7 +43,7 @@ class AnalyzeResponse(BaseModel):
                 "frameworks_detected": ["fastapi"],
                 "errors": [],
                 "warnings": [],
-                "metadata": {"source_path": "/app/code", "is_s3": False, "frameworks_used": ["fastapi"]},
+                "metadata": {"source_path": "/app/code", "frameworks_used": ["fastapi"]},
             }
         }
 
@@ -72,7 +70,7 @@ class InfoResponse(BaseModel):
             "example": {
                 "version": "0.1.0",
                 "supported_frameworks": ["fastapi", "flask", "django_rest", "express", "nestjs", "fastify"],
-                "features": {"s3_support": True, "auto_detection": True, "multiple_frameworks": True},
+                "features": {"auto_detection": True, "multiple_frameworks": True},
             }
         }
 

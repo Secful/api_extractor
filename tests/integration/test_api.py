@@ -49,7 +49,6 @@ def test_analyze_endpoint_success(client, minimal_fastapi_path):
         "/api/v1/analyze",
         json={
             "path": minimal_fastapi_path,
-            "s3": False,
             "title": "Test API",
             "version": "1.0.0",
         },
@@ -71,7 +70,6 @@ def test_analyze_endpoint_auto_detection(client, minimal_fastapi_path):
         "/api/v1/analyze",
         json={
             "path": minimal_fastapi_path,
-            "s3": False,
         },
     )
 
@@ -87,7 +85,6 @@ def test_analyze_endpoint_invalid_path(client):
         "/api/v1/analyze",
         json={
             "path": "/nonexistent/path",
-            "s3": False,
         },
     )
 
@@ -101,7 +98,6 @@ def test_analyze_endpoint_path_traversal_blocked(client):
         "/api/v1/analyze",
         json={
             "path": "../../etc/passwd",
-            "s3": False,
         },
     )
 
@@ -115,7 +111,6 @@ def test_analyze_endpoint_system_directory_blocked(client):
         "/api/v1/analyze",
         json={
             "path": "/etc",
-            "s3": False,
         },
     )
 
@@ -133,27 +128,12 @@ def test_analyze_endpoint_missing_path(client):
     assert response.status_code == 422  # Validation error
 
 
-def test_analyze_endpoint_invalid_s3_uri(client):
-    """Test analysis with invalid S3 URI."""
-    response = client.post(
-        "/api/v1/analyze",
-        json={
-            "path": "http://bucket/path",
-            "s3": True,
-        },
-    )
-
-    assert response.status_code == 400
-    assert "s3://" in response.json()["detail"].lower()
-
-
 def test_analyze_endpoint_with_description(client, minimal_fastapi_path):
     """Test analysis with API description."""
     response = client.post(
         "/api/v1/analyze",
         json={
             "path": minimal_fastapi_path,
-            "s3": False,
             "title": "My API",
             "version": "2.0.0",
             "description": "This is my test API",
@@ -171,7 +151,6 @@ def test_analyze_endpoint_empty_directory(client, tmp_path):
         "/api/v1/analyze",
         json={
             "path": str(tmp_path),
-            "s3": False,
         },
     )
 

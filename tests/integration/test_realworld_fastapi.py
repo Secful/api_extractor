@@ -10,7 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def fastapi_fullstack_path():
     """Get path to fastapi-fullstack real-world fixture."""
     return os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -42,19 +42,19 @@ def test_fastapi_fullstack_extraction(fastapi_fullstack_path):
     paths = {(ep.path, ep.method): ep for ep in result.endpoints}
 
     # Should have found a good number of endpoints
-    assert len(result.endpoints) >= 20, f"Should find at least 20 endpoints, found {len(result.endpoints)}"
+    assert len(result.endpoints) == 23
 
     # Login/authentication endpoints
     login_endpoints = [ep for ep in result.endpoints if "login" in ep.path.lower() or "password" in ep.path.lower()]
-    assert len(login_endpoints) >= 4, f"Should find login/password endpoints, found {len(login_endpoints)}"
+    assert len(login_endpoints) == 6
 
     # User management endpoints (from users.py source file)
     user_endpoints = [ep for ep in result.endpoints if "users.py" in ep.source_file]
-    assert len(user_endpoints) >= 8, f"Should find user management endpoints, found {len(user_endpoints)}"
+    assert len(user_endpoints) == 10
 
     # Items CRUD endpoints (from items.py source file)
     items_endpoints = [ep for ep in result.endpoints if "items.py" in ep.source_file]
-    assert len(items_endpoints) >= 4, f"Should find items CRUD endpoints, found {len(items_endpoints)}"
+    assert len(items_endpoints) == 5
 
     # Check for HTTP methods on items
     items_methods = {ep.method for ep in items_endpoints}
@@ -80,11 +80,11 @@ def test_fastapi_fullstack_router_structure(fastapi_fullstack_path):
     files = {ep.source_file for ep in result.endpoints}
 
     # Should find routes from multiple files (modular architecture)
-    assert len(files) >= 3, f"Should find routes from multiple router files, found {len(files)}"
+    assert len(files) == 5
 
     # Check for routes directory
     route_files = [f for f in files if "/routes/" in f or "\\routes\\" in f]
-    assert len(route_files) >= 2, "Should find routes from app/api/routes directory"
+    assert len(route_files) == 5
 
 
 def test_fastapi_fullstack_path_parameters(fastapi_fullstack_path):

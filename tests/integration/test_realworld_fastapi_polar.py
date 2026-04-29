@@ -14,7 +14,7 @@ from api_extractor.extractors.python.fastapi import FastAPIExtractor
 def polar_path():
     """Get path to Polar real-world fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

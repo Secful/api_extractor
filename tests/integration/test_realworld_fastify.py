@@ -10,7 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def fastify_demo_path():
     """Get path to fastify-demo real-world fixture."""
     return os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -71,7 +71,7 @@ def test_fastify_demo_extraction(fastify_demo_path):
     assert ("/update-password", HTTPMethod.PUT) in paths, "Should find password update endpoint"
 
     # Verify total endpoint count is reasonable
-    assert len(result.endpoints) >= 14, f"Expected at least 14 endpoints, found {len(result.endpoints)}"
+    assert len(result.endpoints) == 14
 
     # Check that endpoints have source file information
     for endpoint in result.endpoints:
@@ -120,7 +120,7 @@ def test_fastify_demo_plugin_structure(fastify_demo_path):
     files = {ep.source_file for ep in result.endpoints}
 
     # Should find routes from multiple files (plugin architecture)
-    assert len(files) >= 3, f"Should find routes from multiple plugin files, found {len(files)}"
+    assert len(files) == 5
 
     # Check for expected route files
     source_files = [os.path.basename(f) for f in files]

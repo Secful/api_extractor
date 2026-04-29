@@ -14,7 +14,7 @@ from api_extractor.extractors.javascript.nestjs import NestJSExtractor
 def realworld_path():
     """Get path to nestjs-realworld-example-app fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",

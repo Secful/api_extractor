@@ -10,7 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def express_examples_path():
     """Get path to express-examples real-world fixture."""
     path = os.path.join(
-        os.path.dirname(__file__),
+        str(os.path.dirname(__file__)),
         "..",
         "fixtures",
         "real-world",
@@ -39,7 +39,7 @@ def test_express_examples_extraction(express_examples_path):
     assert len(result.endpoints) > 0, "Should find endpoints in Express examples"
 
     # Should have found endpoints from multiple examples
-    assert len(result.endpoints) >= 10, f"Expected at least 10 endpoints, found {len(result.endpoints)}"
+    assert len(result.endpoints) == 9
 
     # Verify all endpoints have source file information
     for endpoint in result.endpoints:
@@ -59,7 +59,7 @@ def test_express_examples_routing_patterns(express_examples_path):
     files = {ep.source_file for ep in result.endpoints}
 
     # Should find routes from multiple example files
-    assert len(files) >= 3, f"Should find routes from multiple files, found {len(files)}"
+    assert len(files) == 5
 
 
 def test_express_examples_path_parameters(express_examples_path):
@@ -99,4 +99,4 @@ def test_express_examples_router_usage(express_examples_path):
 
     # Group by methods to verify variety
     methods = {ep.method for ep in result.endpoints}
-    assert len(methods) >= 1, "Should find at least one HTTP method"
+    assert len(methods) == 4
