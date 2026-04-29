@@ -93,7 +93,7 @@ class TestSpringBootEladmin:
         # User management
         assert "/api/users" in paths, "Should find users endpoint"
         user_endpoints = [ep for ep in result.endpoints if "/api/users" in ep.path]
-        assert len(user_endpoints) >= 4, "Should have multiple user operations"
+        assert len(user_endpoints) == 10, "Should have multiple user operations"
 
     def test_rbac_endpoints(self, eladmin_path: str) -> None:
         """Test that RBAC (role/permission) endpoints are extracted."""
@@ -194,7 +194,7 @@ class TestSpringBootEladmin:
 
         # Find download endpoints
         download_endpoints = [ep for ep in result.endpoints if "download" in ep.path]
-        assert len(download_endpoints) >= 5, \
+        assert len(download_endpoints) == 19, \
             f"Expected at least 5 download endpoints, found {len(download_endpoints)}"
 
     def test_code_generator_endpoints(self, eladmin_path: str) -> None:
@@ -230,7 +230,7 @@ class TestSpringBootEladmin:
             elif "eladmin-generator" in source_file:
                 modules_found.add("generator")
 
-        assert len(modules_found) >= 2, \
+        assert len(modules_found) == 4, \
             f"Should extract from multiple modules, found: {modules_found}"
 
     def test_multiple_methods_per_path(self, eladmin_path: str) -> None:

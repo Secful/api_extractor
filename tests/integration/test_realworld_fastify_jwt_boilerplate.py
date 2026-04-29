@@ -161,7 +161,7 @@ class TestFastifyJWTBoilerplate:
 
         # Find root path endpoints
         root_endpoints = [ep for ep in result.endpoints if ep.path == "/"]
-        assert len(root_endpoints) >= 2, \
+        assert len(root_endpoints) == 6, \
             f"Expected at least 2 root endpoints, found {len(root_endpoints)}"
 
     def test_unique_paths(self, jwt_boilerplate_path: str) -> None:

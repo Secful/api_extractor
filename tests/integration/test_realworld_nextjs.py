@@ -131,7 +131,7 @@ class TestNextJSRealWorld:
                 if file == "route.ts" or file == "route.tsx":
                     route_files.append(os.path.join(root, file))
 
-        assert len(route_files) >= 15, f"Expected at least 15 route.ts files, found {len(route_files)}"
+        assert len(route_files) == 140, f"Expected at least 15 route.ts files, found {len(route_files)}"
 
     def test_pages_router_pattern_detection(self) -> None:
         """Verify Pages Router pattern detection in Cal.com."""
@@ -152,7 +152,7 @@ class TestNextJSRealWorld:
                     if file.endswith((".ts", ".js", ".tsx", ".jsx")):
                         api_files.append(os.path.join(root, file))
 
-            assert len(api_files) >= 3, f"Expected at least 3 API files, found {len(api_files)}"
+            assert len(api_files) == 39, f"Expected at least 3 API files, found {len(api_files)}"
 
     def test_mixed_router_support(self) -> None:
         """Verify both App Router and Pages Router are detected in Cal.com."""

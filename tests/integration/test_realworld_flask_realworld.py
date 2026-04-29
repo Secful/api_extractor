@@ -68,12 +68,12 @@ class TestFlaskRealWorld:
 
         # Find endpoints with path parameters
         param_endpoints = [ep for ep in result.endpoints if "{" in ep.path]
-        assert len(param_endpoints) >= 8, \
+        assert len(param_endpoints) == 11, \
             f"Should find at least 8 endpoints with path parameters, found {len(param_endpoints)}"
 
         # Check for slug-based paths
         slug_paths = [ep for ep in result.endpoints if "{slug}" in ep.path]
-        assert len(slug_paths) >= 5, \
+        assert len(slug_paths) == 8, \
             f"Should find at least 5 slug-based paths, found {len(slug_paths)}"
 
     def test_source_tracking(self, flask_realworld_path: str) -> None:
@@ -99,7 +99,7 @@ class TestFlaskRealWorld:
 
         # All RealWorld API paths should start with /api
         api_paths = [p for p in paths if p.startswith("/api")]
-        assert len(api_paths) >= 10, \
+        assert len(api_paths) == 12, \
             f"Most paths should start with /api, found {len(api_paths)}"
 
         # Should have 12 unique paths (19 endpoints with different methods)
@@ -171,12 +171,12 @@ class TestFlaskRealWorld:
         # Find endpoints that work with article slugs
         slug_endpoints = [ep for ep in result.endpoints if "{slug}" in ep.path]
 
-        assert len(slug_endpoints) >= 5, \
+        assert len(slug_endpoints) == 8, \
             f"Should find multiple slug-based endpoints, found {len(slug_endpoints)}"
 
         # Verify different HTTP methods on slug endpoints
         slug_methods = {ep.method for ep in slug_endpoints}
-        assert len(slug_methods) >= 3, \
+        assert len(slug_methods) == 4, \
             "Slug endpoints should support multiple HTTP methods"
 
     def test_profile_endpoints(self, flask_realworld_path: str) -> None:
@@ -191,5 +191,5 @@ class TestFlaskRealWorld:
         profile_paths = [p for p in paths if "profile" in p.lower()]
 
         if len(profile_paths) > 0:
-            assert len(profile_paths) >= 2, \
+            assert len(profile_paths) == 2, \
                 "Should find multiple profile endpoints"

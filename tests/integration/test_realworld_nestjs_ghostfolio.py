@@ -123,7 +123,7 @@ class TestNestJSGhostfolio:
 
         # Find access endpoints
         access_endpoints = [ep for ep in result.endpoints if ep.path.startswith("/access")]
-        assert len(access_endpoints) >= 3, \
+        assert len(access_endpoints) == 4, \
             f"Expected at least 3 access endpoints, found {len(access_endpoints)}"
 
         paths = {ep.path for ep in result.endpoints}
@@ -164,7 +164,7 @@ class TestNestJSGhostfolio:
         # Find paths with multiple parameters
         multi_param_paths = [ep.path for ep in result.endpoints
                             if ep.path.count("{") >= 2]
-        assert len(multi_param_paths) >= 10, \
+        assert len(multi_param_paths) == 20, \
             f"Expected at least 10 paths with multiple parameters, found {len(multi_param_paths)}"
 
         # Verify specific complex paths
@@ -202,7 +202,7 @@ class TestNestJSGhostfolio:
 
         # Find paths with multiple methods (likely CRUD)
         multi_method_paths = [p for p, methods in path_methods.items() if len(methods) >= 2]
-        assert len(multi_method_paths) >= 5, \
+        assert len(multi_method_paths) == 16, \
             f"Expected at least 5 paths with multiple methods, found {len(multi_method_paths)}"
 
     def test_market_data_endpoints(self, ghostfolio_path: str) -> None:
@@ -215,7 +215,7 @@ class TestNestJSGhostfolio:
         # Find market data endpoints
         market_endpoints = [ep for ep in result.endpoints
                            if "market-data" in ep.path or "profile-data" in ep.path]
-        assert len(market_endpoints) >= 5, \
+        assert len(market_endpoints) == 10, \
             f"Expected at least 5 market data endpoints, found {len(market_endpoints)}"
 
     def test_gather_endpoints(self, ghostfolio_path: str) -> None:
@@ -227,7 +227,7 @@ class TestNestJSGhostfolio:
 
         # Find gather endpoints (background job triggers)
         gather_endpoints = [ep for ep in result.endpoints if "gather" in ep.path]
-        assert len(gather_endpoints) >= 5, \
+        assert len(gather_endpoints) == 6, \
             f"Expected at least 5 gather endpoints, found {len(gather_endpoints)}"
 
     def test_unique_paths(self, ghostfolio_path: str) -> None:
@@ -250,7 +250,7 @@ class TestNestJSGhostfolio:
 
         # Find PATCH endpoints
         patch_endpoints = [ep for ep in result.endpoints if ep.method == HTTPMethod.PATCH]
-        assert len(patch_endpoints) >= 1, \
+        assert len(patch_endpoints) == 1, \
             f"Expected at least 1 PATCH endpoint, found {len(patch_endpoints)}"
 
     def test_delete_operations(self, ghostfolio_path: str) -> None:
@@ -262,7 +262,7 @@ class TestNestJSGhostfolio:
 
         # Find DELETE endpoints
         delete_endpoints = [ep for ep in result.endpoints if ep.method == HTTPMethod.DELETE]
-        assert len(delete_endpoints) >= 10, \
+        assert len(delete_endpoints) == 15, \
             f"Expected at least 10 DELETE endpoints, found {len(delete_endpoints)}"
 
     def test_root_endpoint(self, ghostfolio_path: str) -> None:
@@ -284,5 +284,5 @@ class TestNestJSGhostfolio:
 
         # Find balance-related endpoints
         balance_endpoints = [ep for ep in result.endpoints if "balance" in ep.path]
-        assert len(balance_endpoints) >= 3, \
+        assert len(balance_endpoints) == 4, \
             f"Expected at least 3 balance endpoints, found {len(balance_endpoints)}"

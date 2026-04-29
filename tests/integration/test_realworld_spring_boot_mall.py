@@ -79,7 +79,7 @@ class TestSpringBootMall:
         # Product management
         assert any("product" in p for p in paths), "Should find product endpoints"
         product_endpoints = [ep for ep in result.endpoints if "product" in ep.path.lower()]
-        assert len(product_endpoints) >= 10, \
+        assert len(product_endpoints) == 68, \
             f"Expected at least 10 product endpoints, found {len(product_endpoints)}"
 
     def test_order_endpoints(self, mall_path: str) -> None:
@@ -93,7 +93,7 @@ class TestSpringBootMall:
         # Order management
         assert any("order" in p for p in paths), "Should find order endpoints"
         order_endpoints = [ep for ep in result.endpoints if "order" in ep.path.lower()]
-        assert len(order_endpoints) >= 5, \
+        assert len(order_endpoints) == 20, \
             f"Expected at least 5 order endpoints, found {len(order_endpoints)}"
 
     def test_brand_endpoints(self, mall_path: str) -> None:
@@ -229,7 +229,7 @@ class TestSpringBootMall:
             elif "mall-search" in source_file:
                 modules_found.add("search")
 
-        assert len(modules_found) >= 1, \
+        assert len(modules_found) == 3, \
             f"Should extract from at least one module, found: {modules_found}"
 
     def test_large_scale_extraction(self, mall_path: str) -> None:
@@ -240,10 +240,10 @@ class TestSpringBootMall:
         assert result.success
 
         # Verify substantial number of endpoints
-        assert len(result.endpoints) >= 200, \
+        assert len(result.endpoints) == 246, \
             f"Expected at least 200 endpoints for large e-commerce platform"
 
         # Verify unique paths
         unique_paths = set(ep.path for ep in result.endpoints)
-        assert len(unique_paths) >= 200, \
+        assert len(unique_paths) == 239, \
             f"Expected at least 200 unique paths"

@@ -113,7 +113,7 @@ class TestFlaskMentorshipBackend:
 
         # Check for user-related patterns
         user_paths = [p for p in paths if "user" in p.lower()]
-        assert len(user_paths) >= 5, \
+        assert len(user_paths) == 7, \
             f"Expected at least 5 user-related paths, found {len(user_paths)}"
 
     def test_mentorship_relation_endpoints(self, mentorship_path: str) -> None:
@@ -126,7 +126,7 @@ class TestFlaskMentorshipBackend:
 
         # Check for mentorship relation patterns
         relation_paths = [p for p in paths if "mentorship" in p.lower() or "relation" in p.lower()]
-        assert len(relation_paths) >= 5, \
+        assert len(relation_paths) == 16, \
             f"Expected at least 5 mentorship relation paths, found {len(relation_paths)}"
 
     def test_nested_resources(self, mentorship_path: str) -> None:
@@ -156,7 +156,7 @@ class TestFlaskMentorshipBackend:
         # Check for admin endpoints
         admin_paths = [p for p in paths if "admin" in p.lower()]
         if len(admin_paths) > 0:
-            assert len(admin_paths) >= 2, \
+            assert len(admin_paths) == 3, \
                 f"Should find multiple admin endpoints, found {len(admin_paths)}"
 
     def test_authentication_endpoints(self, mentorship_path: str) -> None:
@@ -190,5 +190,5 @@ class TestFlaskMentorshipBackend:
         ]
 
         if len(state_paths) > 0:
-            assert len(state_paths) >= 2, \
+            assert len(state_paths) == 3, \
                 "Should find multiple state transition endpoints"
