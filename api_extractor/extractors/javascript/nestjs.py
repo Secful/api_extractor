@@ -8,7 +8,7 @@ from tree_sitter import Node
 
 from api_extractor.core.base_extractor import BaseExtractor
 from api_extractor.core.parser import find_child_by_type
-from api_extractor.core.typescript_config import TypeScriptConfig
+from api_extractor.extractors.javascript.typescript_config import TypeScriptConfig
 from api_extractor.core.models import (
     Route,
     Parameter,
