@@ -89,7 +89,7 @@ def test_flask_example_profile_endpoints(flask_example_path: str) -> None:
 
     # Profile endpoints
     profile_endpoints = [ep for ep in result.endpoints if "profile" in ep.path.lower()]
-    assert len(profile_endpoints) >= 2, f"Should find profile endpoints, found {len(profile_endpoints)}"
+    assert len(profile_endpoints) == 3, f"Should find profile endpoints, found {len(profile_endpoints)}"
 
 
 def test_flask_example_http_methods(flask_example_path: str) -> None:
