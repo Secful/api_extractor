@@ -55,8 +55,18 @@ class FlaskExtractor(BaseExtractor):
         if not tree:
             return routes
 
+        # Extract imports to resolve schema references
+        imports = self._extract_imports(tree, source_code, file_path)
+
         # Find Pydantic models (if any)
         pydantic_models = self._find_pydantic_models(tree, source_code)
+
+        # Find Marshmallow schemas
+        marshmallow_schemas = self._find_marshmallow_schemas(tree, source_code)
+
+        # Resolve imported schemas
+        imported_schemas = self._resolve_imported_schemas(imports, file_path)
+        marshmallow_schemas.update(imported_schemas)
 
         # First pass: Find Blueprint and Namespace definitions using query
         self._extract_blueprints_query(tree, source_code)
@@ -116,11 +126,24 @@ class FlaskExtractor(BaseExtractor):
 
                 location = self.parser.get_node_location(func_name_node)
 
-                # Extract function parameters for schemas
+                # Extract all decorators (for schema information)
                 func_def_node = func_name_node.parent if func_name_node.parent else None
+                decorated_def_node = func_def_node.parent if func_def_node and func_def_node.parent.type == "decorated_definition" else None
+
+                # Extract schema decorators (@marshal_with, @use_kwargs)
+                schema_metadata = {}
+                if decorated_def_node:
+                    schema_metadata = self._extract_schema_decorators(
+                        decorated_def_node, source_code, marshmallow_schemas
+                    )
+
+                # Extract function parameters for schemas
                 metadata = self._extract_function_metadata(
                     func_def_node, source_code, pydantic_models
                 ) if func_def_node else {}
+
+                # Merge schema metadata
+                metadata.update(schema_metadata)
 
                 route = Route(
                     path=path,
@@ -152,11 +175,24 @@ class FlaskExtractor(BaseExtractor):
 
                 location = self.parser.get_node_location(func_name_node)
 
-                # Extract function parameters for schemas
+                # Extract all decorators (for schema information)
                 func_def_node = func_name_node.parent if func_name_node.parent else None
+                decorated_def_node = func_def_node.parent if func_def_node and func_def_node.parent.type == "decorated_definition" else None
+
+                # Extract schema decorators (@marshal_with, @use_kwargs)
+                schema_metadata = {}
+                if decorated_def_node:
+                    schema_metadata = self._extract_schema_decorators(
+                        decorated_def_node, source_code, marshmallow_schemas
+                    )
+
+                # Extract function parameters for schemas
                 metadata = self._extract_function_metadata(
                     func_def_node, source_code, pydantic_models
                 ) if func_def_node else {}
+
+                # Merge schema metadata
+                metadata.update(schema_metadata)
 
                 route = Route(
                     path=path,
@@ -773,17 +809,31 @@ class FlaskExtractor(BaseExtractor):
             if "query_params" in route.metadata:
                 parameters.extend(route.metadata["query_params"])
 
-            # Get request body from metadata
-            request_body = route.metadata.get("request_body")
+            # Get request body from metadata (Pydantic or Marshmallow)
+            request_body = route.metadata.get("request_body") or route.metadata.get("request_schema")
 
-            # Create default response
-            responses = [
-                Response(
-                    status_code="200",
-                    description="Success",
-                    content_type="application/json",
+            # Build responses list
+            responses = []
+
+            # Check for response schema from @marshal_with
+            if "response_schema" in route.metadata:
+                responses.append(
+                    Response(
+                        status_code="200",
+                        description="Success",
+                        response_schema=route.metadata["response_schema"],
+                        content_type="application/json",
+                    )
                 )
-            ]
+            else:
+                # Default response without schema
+                responses.append(
+                    Response(
+                        status_code="200",
+                        description="Success",
+                        content_type="application/json",
+                    )
+                )
 
             endpoint = Endpoint(
                 path=self._normalize_path(route.raw_path),
@@ -800,3 +850,434 @@ class FlaskExtractor(BaseExtractor):
             endpoints.append(endpoint)
 
         return endpoints
+
+    def _extract_imports(
+        self, tree, source_code: bytes, file_path: str
+    ) -> Dict[str, str]:
+        """
+        Extract import statements to resolve schema references.
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+            file_path: Path to current file
+
+        Returns:
+            Dictionary mapping imported names to module paths
+        """
+        imports = {}
+
+        # Query for import_from_statement nodes
+        import_query = "(import_from_statement) @import_stmt"
+
+        matches = self.parser.query(tree, import_query, "python")
+
+        for match in matches:
+            import_node = match.get("import_stmt")
+            if not import_node:
+                continue
+
+            # Get module name
+            module_name_node = import_node.child_by_field_name("module_name")
+            if not module_name_node:
+                continue
+
+            module_path = self.parser.get_node_text(module_name_node, source_code)
+
+            # Get name or names list
+            name_node = import_node.child_by_field_name("name")
+            if not name_node:
+                continue
+
+            # Handle both single imports and import lists
+            if name_node.type == "dotted_name" or name_node.type == "identifier":
+                # Single import: from x import y
+                import_name = self.parser.get_node_text(name_node, source_code)
+                imports[import_name] = f"{module_path}.{import_name}"
+
+            elif name_node.type == "aliased_import":
+                # Aliased import: from x import y as z
+                actual_name_node = name_node.child_by_field_name("name")
+                alias_name_node = name_node.child_by_field_name("alias")
+                if actual_name_node and alias_name_node:
+                    import_name = self.parser.get_node_text(actual_name_node, source_code)
+                    alias_name = self.parser.get_node_text(alias_name_node, source_code)
+                    imports[alias_name] = f"{module_path}.{import_name}"
+
+            elif hasattr(name_node, 'children'):
+                # Import list: from x import (y, z as w, ...)
+                for child in name_node.children:
+                    if child.type == "dotted_name" or child.type == "identifier":
+                        import_name = self.parser.get_node_text(child, source_code)
+                        imports[import_name] = f"{module_path}.{import_name}"
+                    elif child.type == "aliased_import":
+                        actual_name_node = child.child_by_field_name("name")
+                        alias_name_node = child.child_by_field_name("alias")
+                        if actual_name_node and alias_name_node:
+                            import_name = self.parser.get_node_text(actual_name_node, source_code)
+                            alias_name = self.parser.get_node_text(alias_name_node, source_code)
+                            imports[alias_name] = f"{module_path}.{import_name}"
+
+        return imports
+
+    def _find_marshmallow_schemas(
+        self, tree, source_code: bytes
+    ) -> Dict[str, Schema]:
+        """
+        Find all Marshmallow Schema classes in the file.
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary mapping schema names to Schema objects
+        """
+        schemas = {}
+
+        # Query for classes inheriting from Schema
+        schema_query = """
+        (class_definition
+          name: (identifier) @class_name
+          superclasses: (argument_list) @superclasses
+          body: (block) @class_body)
+        """
+
+        matches = self.parser.query(tree, schema_query, "python")
+
+        for match in matches:
+            class_name_node = match.get("class_name")
+            superclasses_node = match.get("superclasses")
+            class_body_node = match.get("class_body")
+
+            if not all([class_name_node, superclasses_node, class_body_node]):
+                continue
+
+            # Check if Schema is in superclasses
+            superclasses_text = self.parser.get_node_text(superclasses_node, source_code)
+            if "Schema" not in superclasses_text:
+                continue
+
+            class_name = self.parser.get_node_text(class_name_node, source_code)
+
+            # Parse fields from class body
+            schema = self._parse_marshmallow_schema_body(class_body_node, source_code)
+            schemas[class_name] = schema
+
+        return schemas
+
+    def _parse_marshmallow_schema_body(
+        self, class_body_node, source_code: bytes
+    ) -> Schema:
+        """
+        Parse Marshmallow schema fields from class body.
+
+        Args:
+            class_body_node: Class body node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object with properties
+        """
+        properties = {}
+        required_fields = []
+
+        # Iterate through class body children
+        for child in class_body_node.children:
+            if child.type != "expression_statement":
+                continue
+
+            # Check if it's an assignment
+            assignment_node = None
+            for subchild in child.children:
+                if subchild.type == "assignment":
+                    assignment_node = subchild
+                    break
+
+            if not assignment_node:
+                continue
+
+            # Extract field name and call
+            field_name = None
+            call_node = None
+
+            for node in assignment_node.children:
+                if node.type == "identifier" and field_name is None:
+                    field_name = self.parser.get_node_text(node, source_code)
+                elif node.type == "call":
+                    call_node = node
+
+            if not field_name or not call_node:
+                continue
+
+            # Extract field type from call: fields.Str(), fields.Email(), etc.
+            function_node = call_node.child_by_field_name("function")
+            if not function_node or function_node.type != "attribute":
+                continue
+
+            # Get object and attribute
+            object_node = function_node.child_by_field_name("object")
+            attribute_node = function_node.child_by_field_name("attribute")
+
+            if not object_node or not attribute_node:
+                continue
+
+            module = self.parser.get_node_text(object_node, source_code)
+            field_type = self.parser.get_node_text(attribute_node, source_code)
+
+            # Check if it's a fields.* call
+            if module != "fields":
+                continue
+
+            # Map Marshmallow field types to OpenAPI types
+            openapi_type = self._marshmallow_to_openapi_type(field_type)
+
+            properties[field_name] = {
+                "type": openapi_type
+            }
+
+        return Schema(
+            type="object",
+            properties=properties,
+            required=required_fields,
+        )
+
+    def _marshmallow_to_openapi_type(self, marshmallow_type: str) -> str:
+        """
+        Convert Marshmallow field type to OpenAPI type.
+
+        Args:
+            marshmallow_type: Marshmallow field type name
+
+        Returns:
+            OpenAPI type string
+        """
+        type_map = {
+            "Str": "string",
+            "String": "string",
+            "Int": "integer",
+            "Integer": "integer",
+            "Float": "number",
+            "Number": "number",
+            "Bool": "boolean",
+            "Boolean": "boolean",
+            "DateTime": "string",
+            "Date": "string",
+            "Time": "string",
+            "Email": "string",
+            "Url": "string",
+            "URL": "string",
+            "Dict": "object",
+            "List": "array",
+            "Nested": "object",
+        }
+
+        return type_map.get(marshmallow_type, "string")
+
+    def _resolve_imported_schemas(
+        self, imports: Dict[str, str], current_file_path: str
+    ) -> Dict[str, Schema]:
+        """
+        Resolve imported Marshmallow schemas by parsing their source files.
+
+        Args:
+            imports: Dictionary mapping names to module paths
+            current_file_path: Path to current file for relative resolution
+
+        Returns:
+            Dictionary mapping schema names to Schema objects
+        """
+        schemas = {}
+
+        for schema_name, module_path in imports.items():
+            # Only process if it looks like a schema (ends with Schema or schema)
+            if not ("schema" in schema_name.lower() or "Schema" in schema_name):
+                continue
+
+            # Try to resolve the module path to a file path
+            file_path = self._resolve_module_to_file(module_path, current_file_path)
+
+            if not file_path:
+                continue
+
+            # Parse the file to extract Marshmallow schemas
+            try:
+                source_code = self._read_file(file_path)
+                if not source_code:
+                    continue
+
+                tree = self.parser.parse_source(source_code, "python")
+                if not tree:
+                    continue
+
+                # Find all Marshmallow schemas in the imported file
+                imported_schemas = self._find_marshmallow_schemas(tree, source_code)
+
+                # Add the specific imported schema if it exists
+                if schema_name in imported_schemas:
+                    schemas[schema_name] = imported_schemas[schema_name]
+                else:
+                    # Check if it's a schema instance (e.g., profile_schema = ProfileSchema())
+                    # Look for the class name without "schema" suffix
+                    class_name = schema_name.replace("_schema", "").replace("_", " ").title().replace(" ", "") + "Schema"
+                    if class_name in imported_schemas:
+                        schemas[schema_name] = imported_schemas[class_name]
+
+            except Exception:
+                # Skip files that can't be parsed
+                continue
+
+        return schemas
+
+    def _resolve_module_to_file(
+        self, module_path: str, current_file_path: str
+    ) -> Optional[str]:
+        """
+        Resolve a Python module path to a file path.
+
+        Args:
+            module_path: Module path like ".serializers.ProfileSchema"
+            current_file_path: Current file path for relative resolution
+
+        Returns:
+            Resolved file path or None
+        """
+        from pathlib import Path
+
+        # Handle relative imports (starting with .)
+        if module_path.startswith("."):
+            current_dir = Path(current_file_path).parent
+            parts = module_path.lstrip(".").split(".") if module_path != "." else []
+
+            # Count leading dots for parent directory traversal
+            dot_count = len(module_path) - len(module_path.lstrip("."))
+
+            # Go up the directory tree
+            target_dir = current_dir
+            for _ in range(dot_count - 1):
+                target_dir = target_dir.parent
+
+            # Build file path from remaining parts
+            if parts:
+                file_path = target_dir
+                for part in parts[:-1]:
+                    file_path = file_path / part
+
+                # Last part could be a module or a class
+                last_part = parts[-1]
+                final_file = file_path / last_part
+
+                # Try .py file
+                if final_file.with_suffix(".py").exists():
+                    return str(final_file.with_suffix(".py"))
+
+                # Try as a package with __init__.py
+                if (final_file / "__init__.py").exists():
+                    return str(final_file / "__init__.py")
+
+                # Try the parent directory as a .py file (last part might be a class name)
+                if file_path.with_suffix(".py").exists():
+                    return str(file_path.with_suffix(".py"))
+            else:
+                # Just "." - current directory's __init__.py
+                if (target_dir / "__init__.py").exists():
+                    return str(target_dir / "__init__.py")
+
+            return None
+
+        # Handle absolute imports - same logic as FastAPI extractor
+        else:
+            current_dir = Path(current_file_path).parent
+
+            # Look for common project root indicators
+            max_levels = 10
+            for _ in range(max_levels):
+                # Convert module path to file path
+                parts = module_path.split(".")
+                potential_file = current_dir / "/".join(parts)
+
+                # Try .py file
+                if potential_file.with_suffix(".py").exists():
+                    return str(potential_file.with_suffix(".py"))
+
+                # Try package with __init__.py
+                if (potential_file / "__init__.py").exists():
+                    return str(potential_file / "__init__.py")
+
+                # Try one level up
+                if current_dir.parent == current_dir:
+                    break
+                current_dir = current_dir.parent
+
+        return None
+
+    def _extract_schema_decorators(
+        self, decorated_def_node, source_code: bytes, marshmallow_schemas: Dict[str, Schema]
+    ) -> Dict[str, Any]:
+        """
+        Extract schema information from flask-apispec decorators.
+
+        Looks for:
+        - @marshal_with(schema) - response schema
+        - @use_kwargs(schema) - request schema
+
+        Args:
+            decorated_def_node: decorated_definition node
+            source_code: Source code bytes
+            marshmallow_schemas: Available Marshmallow schemas
+
+        Returns:
+            Dictionary with response_schema and/or request_schema
+        """
+        metadata = {}
+
+        # Find all decorator nodes
+        for child in decorated_def_node.children:
+            if child.type != "decorator":
+                continue
+
+            # Extract decorator function name and arguments
+            decorator_call = child.children[1] if len(child.children) > 1 else None
+            if not decorator_call or decorator_call.type != "call":
+                continue
+
+            function_node = decorator_call.child_by_field_name("function")
+            if not function_node:
+                continue
+
+            function_name = self.parser.get_node_text(function_node, source_code)
+
+            # Check for @marshal_with(schema)
+            if function_name == "marshal_with":
+                args_node = decorator_call.child_by_field_name("arguments")
+                if args_node:
+                    schema_name = self._extract_first_argument(args_node, source_code)
+                    if schema_name and schema_name in marshmallow_schemas:
+                        metadata["response_schema"] = marshmallow_schemas[schema_name]
+
+            # Check for @use_kwargs(schema)
+            elif function_name == "use_kwargs":
+                args_node = decorator_call.child_by_field_name("arguments")
+                if args_node:
+                    schema_name = self._extract_first_argument(args_node, source_code)
+                    if schema_name and schema_name in marshmallow_schemas:
+                        metadata["request_schema"] = marshmallow_schemas[schema_name]
+
+        return metadata
+
+    def _extract_first_argument(self, args_node, source_code: bytes) -> Optional[str]:
+        """
+        Extract the first argument from an argument list.
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+
+        Returns:
+            Argument text or None
+        """
+        for child in args_node.children:
+            if child.type in ("identifier", "attribute"):
+                return self.parser.get_node_text(child, source_code)
+
+        return None

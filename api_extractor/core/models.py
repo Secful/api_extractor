@@ -88,6 +88,8 @@ class Endpoint(BaseModel):
     request_body: Optional[Schema] = None
     responses: List[Response] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
+    summary: Optional[str] = None
+    description: Optional[str] = None
     operation_id: Optional[str] = None
     source_file: Optional[str] = None
     source_line: Optional[int] = None

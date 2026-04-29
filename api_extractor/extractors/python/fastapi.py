@@ -350,8 +350,15 @@ class FastAPIExtractor(BaseExtractor):
 
         route_matches = self.parser.query(tree, route_query, "python")
 
-        # First, build a registry of Pydantic models
+        # First, extract imports to resolve model references
+        imports = self._extract_imports(tree, source_code, file_path)
+
+        # Build a registry of Pydantic models (local + imported)
         pydantic_models = self._find_pydantic_models(tree, source_code)
+
+        # Resolve imported models
+        imported_models = self._resolve_imported_models(imports, file_path)
+        pydantic_models.update(imported_models)
 
         for match in route_matches:
             obj_name_node = match.get("obj_name")
@@ -371,9 +378,11 @@ class FastAPIExtractor(BaseExtractor):
             # Extract path from arguments
             path = None
             response_model_name = None
+            decorator_metadata = {}
             if args_node:
                 path = self._extract_path_from_arguments(args_node, source_code)
                 response_model_name = self._extract_response_model(args_node, source_code)
+                decorator_metadata = self._extract_decorator_metadata(args_node, source_code)
 
             if not path:
                 continue
@@ -396,8 +405,18 @@ class FastAPIExtractor(BaseExtractor):
                 metadata.update(params_metadata)
 
             # Add response model if present
-            if response_model_name and response_model_name in pydantic_models:
-                metadata["response_model"] = pydantic_models[response_model_name]
+            if response_model_name:
+                # Track that response_model was specified (even if we couldn't resolve it)
+                metadata["response_model_specified"] = True
+                if response_model_name in pydantic_models:
+                    metadata["response_model"] = pydantic_models[response_model_name]
+
+            # Add decorator metadata (summary, responses, etc)
+            metadata.update(decorator_metadata)
+
+            # Store responses dict for later processing
+            if "responses" in decorator_metadata:
+                metadata["response_codes"] = decorator_metadata["responses"]
 
             # Convert method name to HTTPMethod enum
             http_method = HTTPMethod[method_name.upper()]
@@ -543,18 +562,425 @@ class FastAPIExtractor(BaseExtractor):
             if not all([class_name_node, superclasses_node, class_body_node]):
                 continue
 
-            # Check if BaseModel is in superclasses
+            # Check if it looks like a Pydantic model
+            # Accept all classes that have superclasses - we'll filter later
+            # This allows us to catch classes that inherit from other Pydantic models
             superclasses_text = self.parser.get_node_text(superclasses_node, source_code)
-            if "BaseModel" not in superclasses_text:
+
+            # Skip common non-Pydantic base classes
+            skip_patterns = ["Enum", "Exception", "Error", "TestCase", "ABC"]
+            if any(pattern in superclasses_text for pattern in skip_patterns):
+                continue
+
+            # Accept if it has common Pydantic indicators OR other capital-case classes (likely models)
+            pydantic_indicators = ["BaseModel", "Schema", "TimestampedSchema", "IDSchema", "Mixin"]
+            has_pydantic_base = any(indicator in superclasses_text for indicator in pydantic_indicators)
+            has_model_parent = bool(re.search(r'[A-Z][a-zA-Z0-9]*', superclasses_text))
+
+            if not (has_pydantic_base or has_model_parent):
                 continue
 
             class_name = self.parser.get_node_text(class_name_node, source_code)
 
             # Parse fields from class body
             schema = self._parse_pydantic_class_body(class_body_node, source_code)
-            models[class_name] = schema
+
+            # Store parent class names for later inheritance resolution
+            parent_names = []
+            for child in superclasses_node.children:
+                if child.type in ("identifier", "attribute"):
+                    parent_name = self.parser.get_node_text(child, source_code)
+                    # Extract just the class name (e.g., "module.Class" -> "Class")
+                    if "." in parent_name:
+                        parent_name = parent_name.split(".")[-1]
+                    parent_names.append(parent_name)
+
+            models[class_name] = {"schema": schema, "parents": parent_names}
+
+        # Resolve inheritance - merge parent fields into child schemas
+        resolved_models = self._resolve_model_inheritance(models)
+
+        return resolved_models
+
+    def _extract_imports(
+        self, tree, source_code: bytes, file_path: str
+    ) -> Dict[str, str]:
+        """
+        Extract import statements to resolve model references.
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+            file_path: Path to current file
+
+        Returns:
+            Dictionary mapping imported names to module paths
+            Example: {"CustomerSchema": "polar.customer.schemas.customer"}
+        """
+        imports = {}
+
+        # Query for import_from_statement nodes
+        import_query = "(import_from_statement) @import_stmt"
+
+        matches = self.parser.query(tree, import_query, "python")
+
+        for match in matches:
+            import_node = match.get("import_stmt")
+            if not import_node:
+                continue
+
+            # Get module name
+            module_name_node = import_node.child_by_field_name("module_name")
+            if not module_name_node:
+                continue
+
+            module_path = self.parser.get_node_text(module_name_node, source_code)
+
+            # Get name or names list
+            name_node = import_node.child_by_field_name("name")
+            if not name_node:
+                continue
+
+            # Handle both single imports and import lists
+            if name_node.type == "dotted_name" or name_node.type == "identifier":
+                # Single import: from x import y
+                import_name = self.parser.get_node_text(name_node, source_code)
+                imports[import_name] = f"{module_path}.{import_name}"
+
+            elif name_node.type == "aliased_import":
+                # Aliased import: from x import y as z
+                actual_name_node = name_node.child_by_field_name("name")
+                alias_name_node = name_node.child_by_field_name("alias")
+                if actual_name_node and alias_name_node:
+                    import_name = self.parser.get_node_text(actual_name_node, source_code)
+                    alias_name = self.parser.get_node_text(alias_name_node, source_code)
+                    imports[alias_name] = f"{module_path}.{import_name}"
+
+            elif hasattr(name_node, 'children'):
+                # Import list: from x import (y, z as w, ...)
+                for child in name_node.children:
+                    if child.type == "dotted_name" or child.type == "identifier":
+                        import_name = self.parser.get_node_text(child, source_code)
+                        imports[import_name] = f"{module_path}.{import_name}"
+                    elif child.type == "aliased_import":
+                        actual_name_node = child.child_by_field_name("name")
+                        alias_name_node = child.child_by_field_name("alias")
+                        if actual_name_node and alias_name_node:
+                            import_name = self.parser.get_node_text(actual_name_node, source_code)
+                            alias_name = self.parser.get_node_text(alias_name_node, source_code)
+                            imports[alias_name] = f"{module_path}.{import_name}"
+
+        return imports
+
+    def _resolve_imported_models(
+        self, imports: Dict[str, str], current_file_path: str
+    ) -> Dict[str, Schema]:
+        """
+        Resolve imported Pydantic models by parsing their source files.
+
+        Args:
+            imports: Dictionary mapping names to module paths
+            current_file_path: Path to current file for relative resolution
+
+        Returns:
+            Dictionary mapping model names to Schema objects
+        """
+        models = {}
+
+        for model_name, module_path in imports.items():
+            # Try to resolve the module path to a file path
+            file_path = self._resolve_module_to_file(module_path, current_file_path)
+
+            if not file_path:
+                continue
+
+            # Parse the file to extract Pydantic models
+            try:
+                source_code = self._read_file(file_path)
+                if not source_code:
+                    continue
+
+                tree = self.parser.parse_source(source_code, "python")
+                if not tree:
+                    continue
+
+                # Find all Pydantic models in the imported file
+                imported_models = self._find_pydantic_models(tree, source_code)
+
+                # Add the specific imported model if it exists
+                if model_name in imported_models:
+                    models[model_name] = imported_models[model_name]
+                else:
+                    # Check if it's aliased - look for the actual class name
+                    # Extract the class name from the module path
+                    class_name = module_path.split(".")[-1]
+                    if class_name in imported_models:
+                        models[model_name] = imported_models[class_name]
+                    else:
+                        # Try to resolve type aliases (Annotated, Union, etc.)
+                        type_alias_models = self._resolve_type_alias(
+                            class_name, file_path, imported_models
+                        )
+                        if type_alias_models:
+                            models[model_name] = type_alias_models
+
+            except Exception:
+                # Skip files that can't be parsed
+                continue
 
         return models
+
+    def _resolve_module_to_file(
+        self, module_path: str, current_file_path: str
+    ) -> Optional[str]:
+        """
+        Resolve a Python module path to a file path.
+
+        Args:
+            module_path: Module path like "polar.customer.schemas.customer" or ".schemas.customer"
+            current_file_path: Current file path for relative resolution
+
+        Returns:
+            Resolved file path or None
+        """
+        import os
+        from pathlib import Path
+
+        # Handle relative imports (starting with .)
+        if module_path.startswith("."):
+            current_dir = Path(current_file_path).parent
+            parts = module_path.lstrip(".").split(".") if module_path != "." else []
+
+            # Count leading dots for parent directory traversal
+            dot_count = len(module_path) - len(module_path.lstrip("."))
+
+            # Go up the directory tree
+            target_dir = current_dir
+            for _ in range(dot_count - 1):
+                target_dir = target_dir.parent
+
+            # Build file path from remaining parts
+            if parts:
+                file_path = target_dir
+                for part in parts[:-1]:
+                    file_path = file_path / part
+
+                # Last part could be a module or a class
+                last_part = parts[-1]
+                final_file = file_path / last_part
+
+                # Try .py file
+                if final_file.with_suffix(".py").exists():
+                    return str(final_file.with_suffix(".py"))
+
+                # Try as a package with __init__.py
+                if (final_file / "__init__.py").exists():
+                    return str(final_file / "__init__.py")
+
+                # Try the parent directory as a .py file (last part might be a class name)
+                if file_path.with_suffix(".py").exists():
+                    return str(file_path.with_suffix(".py"))
+            else:
+                # Just "." - current directory's __init__.py
+                if (target_dir / "__init__.py").exists():
+                    return str(target_dir / "__init__.py")
+
+            return None
+
+        # Handle absolute imports
+        else:
+            # Try to find the module in the project
+            # Start from current file and work backwards to find project root
+            current_dir = Path(current_file_path).parent
+
+            # Look for common project root indicators
+            max_levels = 10
+            for _ in range(max_levels):
+                # Convert module path to file path
+                parts = module_path.split(".")
+                potential_file = current_dir / "/".join(parts)
+
+                # Try .py file
+                if potential_file.with_suffix(".py").exists():
+                    return str(potential_file.with_suffix(".py"))
+
+                # Try package with __init__.py
+                if (potential_file / "__init__.py").exists():
+                    return str(potential_file / "__init__.py")
+
+                # Try one level up
+                if current_dir.parent == current_dir:
+                    break
+                current_dir = current_dir.parent
+
+        return None
+
+    def _resolve_type_alias(
+        self, alias_name: str, file_path: str, available_models: Dict[str, Schema]
+    ) -> Optional[Schema]:
+        """
+        Resolve a type alias to its underlying Pydantic model.
+
+        Handles patterns like:
+        - CustomerResponse = Annotated[CustomerIndividual | CustomerTeam, ...]
+        - UserSchema = Union[UserBase, UserExtended]
+
+        Args:
+            alias_name: Name of the type alias
+            file_path: File where the alias is defined
+            available_models: Already extracted models from the same file
+
+        Returns:
+            Schema object or None
+        """
+        try:
+            source_code = self._read_file(file_path)
+            if not source_code:
+                return None
+
+            tree = self.parser.parse_source(source_code, "python")
+            if not tree:
+                return None
+
+            # Query for assignment statements: alias_name = ...
+            query = """
+            (assignment
+              left: (identifier) @var_name
+              right: (_) @value)
+            """
+
+            matches = self.parser.query(tree, query, "python")
+
+            for match in matches:
+                var_name_node = match.get("var_name")
+                value_node = match.get("value")
+
+                if not var_name_node or not value_node:
+                    continue
+
+                var_name = self.parser.get_node_text(var_name_node, source_code)
+
+                if var_name == alias_name:
+                    # Found the alias assignment - extract model names from the value
+                    value_text = self.parser.get_node_text(value_node, source_code)
+
+                    # Extract model names from union types and Annotated
+                    model_names = self._extract_model_names_from_type(value_text)
+
+                    # Return the first available model
+                    for model_name in model_names:
+                        if model_name in available_models:
+                            return available_models[model_name]
+
+        except Exception:
+            pass
+
+        return None
+
+    def _resolve_model_inheritance(
+        self, models_with_parents: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Schema]:
+        """
+        Resolve model inheritance by merging parent fields into child schemas.
+
+        Args:
+            models_with_parents: Dict mapping model names to {schema, parents} dicts
+
+        Returns:
+            Dict mapping model names to fully resolved Schema objects
+        """
+        resolved = {}
+
+        def resolve_model(name: str, visited: set = None) -> Schema:
+            """Recursively resolve a model's fields including inherited ones."""
+            if visited is None:
+                visited = set()
+
+            if name in visited:
+                # Circular dependency - return empty schema
+                return Schema(type="object", properties={})
+
+            if name in resolved:
+                return resolved[name]
+
+            if name not in models_with_parents:
+                # Unknown model - return empty schema
+                return Schema(type="object", properties={})
+
+            visited.add(name)
+            model_data = models_with_parents[name]
+            schema = model_data["schema"]
+            parents = model_data["parents"]
+
+            # Start with current model's properties
+            merged_properties = dict(schema.properties)
+            merged_required = list(schema.required)
+
+            # Merge parent properties (parents first, so child overrides)
+            for parent_name in parents:
+                parent_schema = resolve_model(parent_name, visited.copy())
+                # Add parent properties that aren't overridden
+                for prop_name, prop_value in parent_schema.properties.items():
+                    if prop_name not in merged_properties:
+                        merged_properties[prop_name] = prop_value
+
+                # Merge required fields
+                for req_field in parent_schema.required:
+                    if req_field not in merged_required:
+                        merged_required.append(req_field)
+
+            # Create resolved schema
+            resolved_schema = Schema(
+                type=schema.type,
+                properties=merged_properties,
+                required=merged_required,
+                description=schema.description,
+            )
+
+            resolved[name] = resolved_schema
+            return resolved_schema
+
+        # Resolve all models
+        for name in models_with_parents:
+            resolve_model(name)
+
+        return resolved
+
+    def _extract_model_names_from_type(self, type_expr: str) -> List[str]:
+        """
+        Extract model class names from a type expression.
+
+        Examples:
+        - "Annotated[CustomerIndividual | CustomerTeam, ...]" -> ["CustomerIndividual", "CustomerTeam"]
+        - "Union[UserBase, UserExtended]" -> ["UserBase", "UserExtended"]
+        - "CustomerBase" -> ["CustomerBase"]
+
+        Args:
+            type_expr: Type expression string
+
+        Returns:
+            List of model class names
+        """
+        import re
+
+        # Remove Annotated wrapper
+        type_expr = re.sub(r'Annotated\s*\[', '', type_expr)
+
+        # Remove Optional/Union wrappers
+        type_expr = re.sub(r'(Optional|Union)\s*\[', '', type_expr)
+
+        # Extract identifiers (class names) - match capitalized words
+        # This pattern matches Python class names (PascalCase identifiers)
+        pattern = r'\b([A-Z][a-zA-Z0-9_]*)\b'
+        matches = re.findall(pattern, type_expr)
+
+        # Filter out common type annotation keywords
+        keywords = {'Union', 'Optional', 'Annotated', 'List', 'Dict', 'Set', 'Tuple',
+                   'Any', 'Literal', 'Final', 'ClassVar', 'Discriminator', 'Field', 'Tag'}
+
+        model_names = [m for m in matches if m not in keywords]
+
+        return model_names
 
     def _parse_pydantic_class_body(self, class_body_node: Node, source_code: bytes) -> Schema:
         """
@@ -735,11 +1161,81 @@ class FastAPIExtractor(BaseExtractor):
 
         return None
 
+    def _extract_decorator_metadata(
+        self, args_node: Node, source_code: bytes
+    ) -> Dict[str, Any]:
+        """
+        Extract metadata from decorator arguments (summary, responses, etc).
+
+        Args:
+            args_node: Arguments node
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary with decorator metadata
+        """
+        metadata = {}
+
+        for child in args_node.children:
+            if child.type == "keyword_argument":
+                key_node = child.child_by_field_name("name")
+                value_node = child.child_by_field_name("value")
+
+                if not key_node or not value_node:
+                    continue
+
+                key_text = self.parser.get_node_text(key_node, source_code)
+
+                # Extract summary
+                if key_text == "summary":
+                    if value_node.type == "string":
+                        metadata["summary"] = self.parser.extract_string_value(value_node, source_code)
+
+                # Extract responses dict
+                elif key_text == "responses":
+                    if value_node.type == "dictionary":
+                        responses = self._extract_responses_dict(value_node, source_code)
+                        if responses:
+                            metadata["responses"] = responses
+
+        return metadata
+
+    def _extract_responses_dict(
+        self, dict_node: Node, source_code: bytes
+    ) -> Dict[str, str]:
+        """
+        Extract responses dictionary from decorator.
+        Example: responses={404: NotFoundError, 400: BadRequestError}
+
+        Args:
+            dict_node: Dictionary node
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary mapping status codes to model names
+        """
+        responses = {}
+
+        for child in dict_node.children:
+            if child.type == "pair":
+                key_node = child.child_by_field_name("key")
+                value_node = child.child_by_field_name("value")
+
+                if key_node and value_node:
+                    # Status code (usually an integer)
+                    status_code = self.parser.get_node_text(key_node, source_code)
+                    # Model name (identifier)
+                    model_name = self.parser.get_node_text(value_node, source_code)
+                    responses[status_code] = model_name
+
+        return responses
+
     def _extract_function_parameters(
         self, func_def_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema]
     ) -> Dict[str, Any]:
         """
         Extract function parameters to identify request body and query/header params.
+        Also extracts return type annotation.
 
         Args:
             func_def_node: Function definition node
@@ -747,7 +1243,7 @@ class FastAPIExtractor(BaseExtractor):
             pydantic_models: Dictionary of Pydantic models
 
         Returns:
-            Dictionary with request_body, query_params, header_params
+            Dictionary with request_body, query_params, header_params, return_type
         """
         metadata = {}
         query_params = []
@@ -755,25 +1251,30 @@ class FastAPIExtractor(BaseExtractor):
 
         # Get parameters node
         params_node = func_def_node.child_by_field_name("parameters")
-        if not params_node:
-            return metadata
-
-        for param in params_node.children:
-            if param.type in ("typed_parameter", "typed_default_parameter"):
-                param_info = self._analyze_parameter(param, source_code, pydantic_models)
-                if param_info:
-                    param_type, param_data = param_info
-                    if param_type == "body":
-                        metadata["request_body"] = param_data
-                    elif param_type == "query":
-                        query_params.append(param_data)
-                    elif param_type == "header":
-                        header_params.append(param_data)
+        if params_node:
+            for param in params_node.children:
+                if param.type in ("typed_parameter", "typed_default_parameter"):
+                    param_info = self._analyze_parameter(param, source_code, pydantic_models)
+                    if param_info:
+                        param_type, param_data = param_info
+                        if param_type == "body":
+                            metadata["request_body"] = param_data
+                        elif param_type == "query":
+                            query_params.append(param_data)
+                        elif param_type == "header":
+                            header_params.append(param_data)
 
         if query_params:
             metadata["query_params"] = query_params
         if header_params:
             metadata["header_params"] = header_params
+
+        # Extract return type annotation
+        return_type_node = func_def_node.child_by_field_name("return_type")
+        if return_type_node:
+            return_type = self.parser.get_node_text(return_type_node, source_code)
+            # Store the return type name for later use
+            metadata["return_type"] = return_type
 
         return metadata
 
@@ -943,25 +1444,73 @@ class FastAPIExtractor(BaseExtractor):
             # Get request body from metadata
             request_body = route.metadata.get("request_body")
 
-            # Create default response
-            responses = [
-                Response(
-                    status_code="200",
-                    description="Success",
-                    content_type="application/json",
-                )
-            ]
+            # Build responses list
+            responses = []
 
-            # Add response schema if present
+            # Determine response schema
+            response_schema = None
+
+            # First try response_model from decorator (if successfully resolved)
             if "response_model" in route.metadata:
-                responses = [
+                response_schema = route.metadata["response_model"]
+            # Only use return type annotation if NO response_model was specified in decorator
+            elif "return_type" in route.metadata and not route.metadata.get("response_model_specified"):
+                return_type = route.metadata["return_type"]
+                # Create a simple schema indicating the return type
+                # We don't have the full model definition, so just use description
+                response_schema = Schema(
+                    type="object",
+                    description=f"Returns {return_type} object",
+                )
+
+            # Add 200 response
+            if response_schema:
+                responses.append(
                     Response(
                         status_code="200",
                         description="Success",
-                        response_schema=route.metadata["response_model"],
+                        response_schema=response_schema,
                         content_type="application/json",
                     )
-                ]
+                )
+            else:
+                # Default 200 response without schema
+                responses.append(
+                    Response(
+                        status_code="200",
+                        description="Success",
+                        content_type="application/json",
+                    )
+                )
+
+            # Add additional response codes from responses dict
+            if "response_codes" in route.metadata:
+                for status_code, model_name in route.metadata["response_codes"].items():
+                    # Skip if it's the 200 response (already handled)
+                    if status_code == "200":
+                        continue
+
+                    # Get description based on status code
+                    status_descriptions = {
+                        "400": "Bad Request",
+                        "401": "Unauthorized",
+                        "403": "Forbidden",
+                        "404": "Not Found",
+                        "422": "Validation Error",
+                        "500": "Internal Server Error",
+                    }
+                    description = status_descriptions.get(status_code, f"Response {status_code}")
+
+                    responses.append(
+                        Response(
+                            status_code=status_code,
+                            description=description,
+                            content_type="application/json",
+                        )
+                    )
+
+            # Get summary from metadata
+            summary = route.metadata.get("summary")
 
             endpoint = Endpoint(
                 path=self._normalize_path(route.raw_path),
@@ -970,6 +1519,7 @@ class FastAPIExtractor(BaseExtractor):
                 request_body=request_body,
                 responses=responses,
                 tags=[self.framework.value],
+                summary=summary,
                 operation_id=route.handler_name,
                 source_file=route.source_file,
                 source_line=route.source_line,

@@ -127,14 +127,24 @@ class OpenAPIBuilder:
             # Default response
             responses["200"] = Response(description="Success")
 
-        # Build operation
-        operation = Operation(
-            tags=endpoint.tags if endpoint.tags else None,
-            operation_id=endpoint.operation_id,
-            parameters=parameters if parameters else None,
-            request_body=request_body,
-            responses=responses,
-        )
+        # Build operation with extension fields
+        operation_data = {
+            "tags": endpoint.tags if endpoint.tags else None,
+            "summary": endpoint.summary,
+            "description": endpoint.description,
+            "operation_id": endpoint.operation_id,
+            "parameters": parameters if parameters else None,
+            "request_body": request_body,
+            "responses": responses,
+        }
+
+        # Add api_extractor extension fields (x-api-extractor-*)
+        if endpoint.source_file:
+            operation_data["x-api-extractor-source-file"] = endpoint.source_file
+        if endpoint.source_line:
+            operation_data["x-api-extractor-source-line"] = endpoint.source_line
+
+        operation = Operation(**operation_data)
 
         return operation
 

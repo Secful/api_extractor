@@ -66,7 +66,7 @@ class ParameterObject(BaseModel):
     in_: str = Field(..., alias="in")
     description: Optional[str] = None
     required: Optional[bool] = False
-    deprecated: Optional[bool] = False
+    deprecated: Optional[bool] = None
     schema_: Optional[SchemaObject] = Field(None, alias="schema")
     example: Optional[Any] = None
 
@@ -100,7 +100,7 @@ class Response(BaseModel):
 class Operation(BaseModel):
     """Operation object."""
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "allow"}
 
     tags: Optional[List[str]] = None
     summary: Optional[str] = None
@@ -109,7 +109,7 @@ class Operation(BaseModel):
     parameters: Optional[List[ParameterObject]] = None
     request_body: Optional[RequestBody] = Field(None, alias="requestBody")
     responses: Dict[str, Response]
-    deprecated: Optional[bool] = False
+    deprecated: Optional[bool] = None
     security: Optional[List[Dict[str, List[str]]]] = None
 
 
