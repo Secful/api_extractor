@@ -130,13 +130,10 @@ class OpenAPIBuilder:
         # Build operation
         operation = Operation(
             tags=endpoint.tags if endpoint.tags else None,
-            summary=endpoint.summary,
-            description=endpoint.description,
             operation_id=endpoint.operation_id,
             parameters=parameters if parameters else None,
             request_body=request_body,
             responses=responses,
-            deprecated=endpoint.deprecated,
         )
 
         return operation

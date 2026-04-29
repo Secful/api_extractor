@@ -84,14 +84,11 @@ class Endpoint(BaseModel):
 
     path: str
     method: HTTPMethod
-    summary: Optional[str] = None
-    description: Optional[str] = None
     parameters: List[Parameter] = Field(default_factory=list)
     request_body: Optional[Schema] = None
     responses: List[Response] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
     operation_id: Optional[str] = None
-    deprecated: bool = False
     source_file: Optional[str] = None
     source_line: Optional[int] = None
 
