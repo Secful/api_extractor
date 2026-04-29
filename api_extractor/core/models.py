@@ -52,6 +52,7 @@ class Schema(BaseModel):
     example: Optional[Any] = None
     ref: Optional[str] = None  # Reference to a reusable schema
     items: Optional[Any] = None  # For array type schemas
+    enum: Optional[List[Any]] = None  # For enum types
 
 
 class Parameter(BaseModel):

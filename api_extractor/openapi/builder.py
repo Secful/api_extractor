@@ -53,6 +53,9 @@ class OpenAPIBuilder:
         # Collect all unique tags
         all_tags = set()
 
+        # Collect all schemas for components section
+        self.collected_schemas: Dict[str, Schema] = {}
+
         for endpoint in endpoints:
             path = endpoint.path
             method = endpoint.method.value.lower()
@@ -77,6 +80,11 @@ class OpenAPIBuilder:
         # Build tags
         tags = [Tag(name=tag) for tag in sorted(all_tags)]
 
+        # Build components section if schemas were collected
+        components = None
+        if self.collected_schemas:
+            components = {"schemas": self._build_schemas_dict()}
+
         # Build specification
         spec = OpenAPISpec(
             openapi="3.1.0",
@@ -87,6 +95,7 @@ class OpenAPIBuilder:
             ),
             servers=[],
             paths=path_items,
+            components=components,
             tags=tags if tags else None,
         )
 
@@ -176,6 +185,7 @@ class OpenAPIBuilder:
     def _schema_to_openapi(self, schema: Schema) -> SchemaObject:
         """
         Convert Schema to OpenAPI SchemaObject.
+        Collects schemas with refs for components section.
 
         Args:
             schema: Schema object
@@ -184,13 +194,29 @@ class OpenAPIBuilder:
             SchemaObject
         """
         if schema.ref:
+            # Extract schema name from ref
+            if schema.ref.startswith("#/components/schemas/"):
+                schema_name = schema.ref.split("/")[-1]
+                # Store the schema for components section
+                if schema_name not in self.collected_schemas:
+                    self.collected_schemas[schema_name] = schema
             return SchemaObject(ref=schema.ref)
+
+        # Store schema with properties for components section
+        if schema.type == "object" and schema.properties:
+            # Generate a name if this is a reusable schema
+            # For now, we'll let the extractor name them via refs
+            pass
 
         openapi_schema = SchemaObject(
             type=schema.type,
             description=schema.description,
             example=schema.example,
         )
+
+        # Add enum support
+        if hasattr(schema, "enum") and schema.enum:
+            openapi_schema.enum = schema.enum
 
         if schema.properties:
             openapi_schema.properties = {}
@@ -215,6 +241,22 @@ class OpenAPIBuilder:
                 openapi_schema.items = SchemaObject(**schema.items)
 
         return openapi_schema
+
+    def _build_schemas_dict(self) -> Dict[str, SchemaObject]:
+        """
+        Build schemas dictionary for components section.
+
+        Returns:
+            Dictionary of schema names to SchemaObject
+        """
+        schemas = {}
+        for name, schema in self.collected_schemas.items():
+            # Convert to OpenAPI schema without the ref
+            if schema.ref:
+                # Skip - this is just a reference, actual schema should be defined elsewhere
+                continue
+            schemas[name] = self._schema_to_openapi(schema)
+        return schemas
 
     def _response_to_openapi(self, response: EndpointResponse) -> Response:
         """
