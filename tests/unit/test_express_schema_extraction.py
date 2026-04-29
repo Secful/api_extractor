@@ -3,6 +3,7 @@
 import os
 import pytest
 import tempfile
+from pathlib import Path
 from api_extractor.extractors.javascript.express import ExpressExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -259,14 +260,7 @@ module.exports = router;
 
 def test_express_javascript_no_types():
     """Test JavaScript endpoints without types still work."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_express.js",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_express.js")
 
     extractor = ExpressExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))

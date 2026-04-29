@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from pathlib import Path
 from api_extractor.extractors.javascript.nestjs import NestJSExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -9,14 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def test_nestjs_dto_extraction():
     """Test DTO class extraction."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_nestjs.ts",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_nestjs.ts")
 
     # Extract routes
     extractor = NestJSExtractor()
@@ -47,14 +41,7 @@ def test_nestjs_dto_extraction():
 
 def test_nestjs_query_parameters():
     """Test @Query parameter extraction."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_nestjs.ts",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_nestjs.ts")
 
     extractor = NestJSExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -87,14 +74,7 @@ def test_nestjs_query_parameters():
 
 def test_nestjs_param_decorator():
     """Test @Param parameter extraction."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_nestjs.ts",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_nestjs.ts")
 
     extractor = NestJSExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -174,14 +154,7 @@ export class TestController {
 
 def test_nestjs_mixed_parameters():
     """Test endpoint with multiple parameter types."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_nestjs.ts",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_nestjs.ts")
 
     extractor = NestJSExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -206,14 +179,7 @@ def test_nestjs_mixed_parameters():
 
 def test_nestjs_no_schema():
     """Test endpoints without DTOs still work."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_nestjs.ts",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_nestjs.ts")
 
     extractor = NestJSExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -232,14 +198,7 @@ def test_nestjs_no_schema():
 
 def test_nestjs_nested_paths():
     """Test nested path handling."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_nestjs.ts",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_nestjs.ts")
 
     extractor = NestJSExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))

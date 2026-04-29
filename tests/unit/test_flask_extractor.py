@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from pathlib import Path
 from api_extractor.extractors.python.flask import FlaskExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -9,9 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def test_flask_extractor():
     """Test Flask route extraction."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__), "..", "fixtures", "minimal", "python", "sample_flask.py"
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_flask.py")
 
     # Extract routes
     extractor = FlaskExtractor()

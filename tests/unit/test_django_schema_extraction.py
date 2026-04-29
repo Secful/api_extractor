@@ -2,20 +2,14 @@
 
 import os
 import pytest
+from pathlib import Path
 from api_extractor.extractors.python.django_rest import DjangoRESTExtractor
 from api_extractor.core.models import HTTPMethod
 
 
 def test_django_serializer_extraction():
     """Test serializer class extraction."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_django.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     extractor = DjangoRESTExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -47,14 +41,7 @@ def test_django_serializer_extraction():
 
 def test_django_field_type_mapping():
     """Test DRF field types to OpenAPI type mapping."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_django.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     extractor = DjangoRESTExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -78,14 +65,7 @@ def test_django_field_type_mapping():
 
 def test_django_field_constraints():
     """Test field constraint extraction (max_length, max_digits, etc.)."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_django.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     extractor = DjangoRESTExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -121,14 +101,7 @@ def test_django_field_constraints():
 
 def test_django_response_schema():
     """Test response schema extraction for GET methods."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_django.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     extractor = DjangoRESTExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -154,14 +127,7 @@ def test_django_response_schema():
 
 def test_django_list_response_schema():
     """Test list response schema (array of objects)."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_django.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     extractor = DjangoRESTExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -184,14 +150,7 @@ def test_django_list_response_schema():
 
 def test_django_update_request_schema():
     """Test PUT/PATCH methods use serializer for request body."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_django.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     extractor = DjangoRESTExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -213,14 +172,7 @@ def test_django_update_request_schema():
 
 def test_django_readonly_viewset():
     """Test ReadOnlyModelViewSet (only list and retrieve)."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_django.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     extractor = DjangoRESTExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -244,14 +196,7 @@ def test_django_readonly_viewset():
 
 def test_django_no_serializer():
     """Test endpoints without serializers still work."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_django.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     extractor = DjangoRESTExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))

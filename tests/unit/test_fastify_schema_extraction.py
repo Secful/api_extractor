@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from pathlib import Path
 from api_extractor.extractors.javascript.fastify import FastifyExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -9,14 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def test_fastify_request_body_schema():
     """Test request body schema extraction from inline JSON schema."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_fastify.js",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_fastify.js")
 
     # Extract routes
     extractor = FastifyExtractor()
@@ -60,14 +54,7 @@ def test_fastify_request_body_schema():
 def test_fastify_no_schema():
     """Test endpoints without schemas still work."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "javascript",
-        "sample_fastify.js",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_fastify.js")
 
     # Extract routes
     extractor = FastifyExtractor()

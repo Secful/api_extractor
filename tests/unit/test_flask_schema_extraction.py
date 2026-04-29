@@ -3,6 +3,7 @@
 import os
 import pytest
 import tempfile
+from pathlib import Path
 from api_extractor.extractors.python.flask import FlaskExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -99,14 +100,7 @@ def create_item(item: Item):
 
 def test_flask_query_parameter_extraction():
     """Test query parameter extraction from request.args.get()."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_flask.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_flask.py")
 
     extractor = FlaskExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
@@ -133,14 +127,7 @@ def test_flask_query_parameter_extraction():
 
 def test_flask_no_pydantic():
     """Test endpoints without Pydantic still work."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_flask.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_flask.py")
 
     extractor = FlaskExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))

@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from pathlib import Path
 from api_extractor.extractors.javascript.express import ExpressExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -9,9 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def test_express_extractor():
     """Test Express route extraction."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__), "..", "fixtures", "minimal", "javascript", "sample_express.js"
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "javascript" / "sample_express.js")
 
     # Extract routes
     extractor = ExpressExtractor()

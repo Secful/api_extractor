@@ -18,7 +18,7 @@ def extractor():
 @pytest.fixture
 def minimal_fixture_path():
     """Get path to minimal C# test fixture."""
-    return str(Path(__file__).parent.parent / "fixtures" / "minimal" / "csharp")
+    return str(Path(__file__).parent.parent / "fixtures" / "minimal" / "csharp" / "aspnet-core")
 
 
 def test_aspnet_core_framework_type(extractor):

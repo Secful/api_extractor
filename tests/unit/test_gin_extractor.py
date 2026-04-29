@@ -6,6 +6,7 @@ import os
 import tempfile
 
 import pytest
+from pathlib import Path
 
 from api_extractor.extractors.go.gin import GinExtractor
 from api_extractor.core.models import HTTPMethod, FrameworkType
@@ -14,9 +15,7 @@ from api_extractor.core.models import HTTPMethod, FrameworkType
 def test_gin_basic_extraction():
     """Test Gin route extraction from minimal fixture."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__), "..", "fixtures", "minimal", "go"
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "go")
 
     # Extract routes
     extractor = GinExtractor()

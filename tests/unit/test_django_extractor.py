@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from pathlib import Path
 from api_extractor.extractors.python.django_rest import DjangoRESTExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -9,9 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def test_django_extractor():
     """Test Django REST route extraction."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__), "..", "fixtures", "minimal", "python", "sample_django.py"
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_django.py")
 
     # Extract routes
     extractor = DjangoRESTExtractor()
