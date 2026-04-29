@@ -181,6 +181,6 @@ class TestSpringBootRealWorld:
 
         # Should have extracted various method types from annotations
         # @GetMapping, @PostMapping, @PutMapping, @DeleteMapping, etc.
-        assert len(methods_count) >= 3, "Should detect multiple HTTP method types"
+        assert len(methods_count) == 4, "Should detect multiple HTTP method types"
         assert methods_count.get("GET", 0) > 0, "Should find @GetMapping endpoints"
         assert methods_count.get("POST", 0) > 0, "Should find @PostMapping endpoints"

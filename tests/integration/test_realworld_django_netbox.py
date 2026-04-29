@@ -71,7 +71,7 @@ class TestDjangoNetBox:
 
         # Find endpoints with path parameters (detail views)
         param_endpoints = [ep for ep in result.endpoints if "{" in ep.path]
-        assert len(param_endpoints) >= 10, \
+        assert len(param_endpoints) == 510, \
             f"Should find at least 10 endpoints with path parameters, found {len(param_endpoints)}"
 
     def test_source_tracking(self, netbox_path: str) -> None:

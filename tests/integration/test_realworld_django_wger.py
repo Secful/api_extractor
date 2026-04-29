@@ -69,7 +69,7 @@ class TestDjangoWger:
 
         # Find endpoints with path parameters (detail views)
         param_endpoints = [ep for ep in result.endpoints if "{" in ep.path]
-        assert len(param_endpoints) >= 40, \
+        assert len(param_endpoints) == 120, \
             f"Should find at least 40 endpoints with path parameters, found {len(param_endpoints)}"
 
     def test_source_tracking(self, wger_path: str) -> None:

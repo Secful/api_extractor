@@ -45,7 +45,7 @@ def test_flask_example_extraction(flask_example_path: str) -> None:
 
     # Should have found a reasonable number of endpoints
     # This fixture has ~19 @blueprint.route decorators
-    assert len(result.endpoints) >= 15, f"Expected at least 15 endpoints, found {len(result.endpoints)}"
+    assert len(result.endpoints) == 19, f"Expected at least 15 endpoints, found {len(result.endpoints)}"
 
 
 def test_flask_example_article_endpoints(flask_example_path: str) -> None:
@@ -55,11 +55,11 @@ def test_flask_example_article_endpoints(flask_example_path: str) -> None:
 
     # Article endpoints (core functionality of blogging platform)
     article_endpoints = [ep for ep in result.endpoints if "article" in ep.path.lower()]
-    assert len(article_endpoints) >= 7, f"Should find article endpoints, found {len(article_endpoints)}"
+    assert len(article_endpoints) == 11, f"Should find article endpoints, found {len(article_endpoints)}"
 
     # Verify we have the main articles listing endpoint
     article_list_endpoints = [ep for ep in result.endpoints if ep.path == "/api/articles"]
-    assert len(article_list_endpoints) >= 1, "Should have /api/articles endpoint"
+    assert len(article_list_endpoints) == 2, "Should have /api/articles endpoint"
 
 
 def test_flask_example_user_endpoints(flask_example_path: str) -> None:
@@ -69,7 +69,7 @@ def test_flask_example_user_endpoints(flask_example_path: str) -> None:
 
     # User authentication endpoints
     user_endpoints = [ep for ep in result.endpoints if "user" in ep.path.lower()]
-    assert len(user_endpoints) >= 2, f"Should find user endpoints, found {len(user_endpoints)}"
+    assert len(user_endpoints) == 7, f"Should find user endpoints, found {len(user_endpoints)}"
 
 
 def test_flask_example_comment_endpoints(flask_example_path: str) -> None:
@@ -79,7 +79,7 @@ def test_flask_example_comment_endpoints(flask_example_path: str) -> None:
 
     # Comment endpoints
     comment_endpoints = [ep for ep in result.endpoints if "comment" in ep.path.lower()]
-    assert len(comment_endpoints) >= 2, f"Should find comment endpoints, found {len(comment_endpoints)}"
+    assert len(comment_endpoints) == 3, f"Should find comment endpoints, found {len(comment_endpoints)}"
 
 
 def test_flask_example_profile_endpoints(flask_example_path: str) -> None:
@@ -145,7 +145,7 @@ def test_flask_example_blueprint_structure(flask_example_path: str) -> None:
 
     # Should find routes from multiple files (modular Blueprint architecture)
     # Expected files: articles/views.py, user/views.py, profile/views.py
-    assert len(files) >= 3, f"Should find routes from multiple Blueprint files, found {len(files)}"
+    assert len(files) == 3, f"Should find routes from multiple Blueprint files, found {len(files)}"
 
 
 def test_flask_example_favorite_endpoints(flask_example_path: str) -> None:
@@ -155,7 +155,7 @@ def test_flask_example_favorite_endpoints(flask_example_path: str) -> None:
 
     # Favorite endpoints
     favorite_endpoints = [ep for ep in result.endpoints if "favorite" in ep.path.lower()]
-    assert len(favorite_endpoints) >= 1, f"Should find favorite endpoints, found {len(favorite_endpoints)}"
+    assert len(favorite_endpoints) == 2, f"Should find favorite endpoints, found {len(favorite_endpoints)}"
 
 
 def test_flask_example_tags_endpoint(flask_example_path: str) -> None:
@@ -165,4 +165,4 @@ def test_flask_example_tags_endpoint(flask_example_path: str) -> None:
 
     # Tags endpoint
     tags_endpoints = [ep for ep in result.endpoints if ep.path == "/api/tags"]
-    assert len(tags_endpoints) >= 1, "Should have /api/tags endpoint"
+    assert len(tags_endpoints) == 1, "Should have /api/tags endpoint"

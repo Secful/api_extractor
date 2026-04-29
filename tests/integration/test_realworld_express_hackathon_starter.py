@@ -123,7 +123,7 @@ class TestExpressHackathonStarter:
         # Find payment endpoints
         payment_endpoints = [ep for ep in result.endpoints
                             if "stripe" in ep.path or "paypal" in ep.path]
-        assert len(payment_endpoints) >= 4, \
+        assert len(payment_endpoints) == 5, \
             f"Expected at least 4 payment endpoints, found {len(payment_endpoints)}"
 
     def test_api_integration_endpoints(self, hackathon_starter_path: str) -> None:
