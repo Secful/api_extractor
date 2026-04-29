@@ -213,8 +213,8 @@ class TestFastAPIPolar:
         streaming_keywords = ["stream", "listen"]
         streaming_paths = [p for p in paths if any(kw in p.lower() for kw in streaming_keywords)]
 
-        assert len(streaming_paths) >= 1, \
-            f"Should find streaming endpoints, found {len(streaming_paths)}"
+        assert len(streaming_paths) == 6, \
+            f"Should find exactly 6 streaming endpoints, found {len(streaming_paths)}"
 
     def test_large_scale_extraction(self, polar_path: str) -> None:
         """Test that extractor handles large codebases efficiently."""
@@ -225,8 +225,8 @@ class TestFastAPIPolar:
 
         # Verify we found a substantial number of unique paths
         paths = set(ep.path for ep in result.endpoints)
-        assert len(paths) >= 100, \
-            f"Should find many unique paths, found {len(paths)}"
+        assert len(paths) == 217, \
+            f"Should find exactly 217 unique paths, found {len(paths)}"
 
         # Verify multiple HTTP methods per path
         # This indicates proper method extraction

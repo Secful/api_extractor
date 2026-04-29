@@ -140,8 +140,8 @@ class TestFastifyDailyAPI:
 
         # Find endpoints with path parameters
         param_endpoints = [ep for ep in result.endpoints if "{" in ep.path]
-        assert len(param_endpoints) >= 20, \
-            f"Expected at least 20 endpoints with path parameters, found {len(param_endpoints)}"
+        assert len(param_endpoints) == 43, \
+            f"Expected exactly 43 endpoints with path parameters, found {len(param_endpoints)}"
 
         # Verify OpenAPI format (not Fastify :param format)
         for ep in param_endpoints:
@@ -199,8 +199,8 @@ class TestFastifyDailyAPI:
 
         # Find DELETE endpoints
         delete_endpoints = [ep for ep in result.endpoints if ep.method == HTTPMethod.DELETE]
-        assert len(delete_endpoints) >= 5, \
-            f"Expected at least 5 DELETE endpoints, found {len(delete_endpoints)}"
+        assert len(delete_endpoints) == 6, \
+            f"Expected exactly 6 DELETE endpoints, found {len(delete_endpoints)}"
 
     def test_patch_operations(self, daily_api_path: str) -> None:
         """Test that PATCH operations are extracted."""
@@ -211,8 +211,8 @@ class TestFastifyDailyAPI:
 
         # Find PATCH endpoints
         patch_endpoints = [ep for ep in result.endpoints if ep.method == HTTPMethod.PATCH]
-        assert len(patch_endpoints) >= 3, \
-            f"Expected at least 3 PATCH endpoints, found {len(patch_endpoints)}"
+        assert len(patch_endpoints) == 5, \
+            f"Expected exactly 5 PATCH endpoints, found {len(patch_endpoints)}"
 
     def test_api_user_endpoint(self, daily_api_path: str) -> None:
         """Test that API user briefing endpoint is extracted."""
@@ -233,8 +233,8 @@ class TestFastifyDailyAPI:
 
         # Find root path endpoints (may be multiple from different route files)
         root_endpoints = [ep for ep in result.endpoints if ep.path == "/"]
-        assert len(root_endpoints) >= 10, \
-            f"Expected at least 10 root endpoints from different routes, found {len(root_endpoints)}"
+        assert len(root_endpoints) == 23, \
+            f"Expected exactly 23 root endpoints from different routes, found {len(root_endpoints)}"
 
     def test_slug_based_routing(self, daily_api_path: str) -> None:
         """Test that slug-based routing is properly extracted."""
@@ -245,8 +245,8 @@ class TestFastifyDailyAPI:
 
         # Find slug parameter endpoints
         slug_endpoints = [ep for ep in result.endpoints if "{slug}" in ep.path]
-        assert len(slug_endpoints) >= 1, \
-            f"Expected at least 1 endpoint with {{slug}} parameter, found {len(slug_endpoints)}"
+        assert len(slug_endpoints) == 1, \
+            f"Expected exactly 1 endpoint with {{slug}} parameter, found {len(slug_endpoints)}"
 
         # Verify specific slug pattern
         paths = {ep.path for ep in result.endpoints}
