@@ -198,8 +198,8 @@ class TestFastAPIPolar:
         oauth_keywords = ["authorize", "callback", "consent", "token"]
         oauth_paths = [p for p in paths if any(kw in p.lower() for kw in oauth_keywords)]
 
-        assert len(oauth_paths) == 0, \
-            f"Should find OAuth endpoints, found {len(oauth_paths)}"
+        assert len(oauth_paths) == 21, \
+            f"Should find exactly 21 OAuth endpoints, found {len(oauth_paths)}"
 
     def test_streaming_endpoints(self, polar_path: str) -> None:
         """Test that streaming endpoints are detected."""

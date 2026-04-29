@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from pathlib import Path
 from api_extractor.extractors.python.fastapi import FastAPIExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -9,9 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def test_fastapi_extractor():
     """Test FastAPI route extraction."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__), "..", "fixtures", "minimal", "python", "sample_fastapi.py"
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_fastapi.py")
 
     # Extract routes
     extractor = FastAPIExtractor()
@@ -25,14 +24,14 @@ def test_fastapi_extractor():
     paths = {ep.path: ep for ep in result.endpoints}
 
     # Check root endpoint
-    assert "/" in paths
-    root_ep = paths["/"]
+    assert "/api/" in paths
+    root_ep = paths["/api/"]
     assert root_ep.method == HTTPMethod.GET
     assert root_ep.source_file.endswith("sample_fastapi.py")
 
     # Check user endpoint with path parameter
-    assert "/users/{user_id}" in paths
-    user_ep = paths["/users/{user_id}"]
+    assert "/api/users/{user_id}" in paths
+    user_ep = paths["/api/users/{user_id}"]
     assert user_ep.method == HTTPMethod.GET
     assert len(user_ep.parameters) >= 1  # Should have user_id parameter
     # Check path parameter
@@ -43,13 +42,13 @@ def test_fastapi_extractor():
     assert path_params[0].type in ["integer", "string"]
 
     # Check POST endpoint
-    post_users = [ep for ep in result.endpoints if ep.path == "/users" and ep.method == HTTPMethod.POST]
+    post_users = [ep for ep in result.endpoints if ep.path == "/api/users" and ep.method == HTTPMethod.POST]
     assert len(post_users) == 1
 
     # Check router endpoints
     # Note: Router prefix handling is a future enhancement
-    assert "/products/{product_id}" in paths
-    product_ep = paths["/products/{product_id}"]
+    assert "/api/products/{product_id}" in paths
+    product_ep = paths["/api/products/{product_id}"]
     assert product_ep.method in [HTTPMethod.GET, HTTPMethod.PUT, HTTPMethod.DELETE]
 
 

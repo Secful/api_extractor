@@ -2,6 +2,7 @@
 
 import os
 import pytest
+from pathlib import Path
 from api_extractor.extractors.python.fastapi import FastAPIExtractor
 from api_extractor.core.models import HTTPMethod
 
@@ -9,14 +10,7 @@ from api_extractor.core.models import HTTPMethod
 def test_fastapi_pydantic_request_body():
     """Test Pydantic model extraction for request body."""
     # Get fixture path
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_fastapi.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_fastapi.py")
 
     # Extract routes
     extractor = FastAPIExtractor()
@@ -25,14 +19,14 @@ def test_fastapi_pydantic_request_body():
     assert result.success
     assert len(result.endpoints) > 0
 
-    # Find POST /users endpoint (uses User model)
+    # Find POST /api/users endpoint (uses User model)
     endpoint = None
     for ep in result.endpoints:
-        if ep.path == "/users" and ep.method == HTTPMethod.POST:
+        if ep.path == "/api/users" and ep.method == HTTPMethod.POST:
             endpoint = ep
             break
 
-    assert endpoint is not None, "POST /users endpoint not found"
+    assert endpoint is not None, "POST /api/users endpoint not found"
 
     # Verify request body schema
     assert endpoint.request_body is not None
@@ -49,26 +43,19 @@ def test_fastapi_pydantic_request_body():
 
 def test_fastapi_pydantic_optional_fields():
     """Test Pydantic model with optional fields."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_fastapi.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_fastapi.py")
 
     extractor = FastAPIExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
 
-    # Find POST /products endpoint (uses Item model with optional fields)
+    # Find POST /api/products endpoint (uses Item model with optional fields)
     endpoint = None
     for ep in result.endpoints:
-        if ep.path == "/products" and ep.method == HTTPMethod.POST:
+        if ep.path == "/api/products" and ep.method == HTTPMethod.POST:
             endpoint = ep
             break
 
-    assert endpoint is not None, "POST /products endpoint not found"
+    assert endpoint is not None, "POST /api/products endpoint not found"
 
     # Verify Item model schema
     assert endpoint.request_body is not None
@@ -87,30 +74,23 @@ def test_fastapi_pydantic_optional_fields():
 
 def test_fastapi_query_parameters():
     """Test Query parameter extraction with descriptions."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_fastapi.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_fastapi.py")
 
     extractor = FastAPIExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
 
-    # Find GET /items endpoint (has Query parameters) from sample_fastapi.py specifically
+    # Find GET /api/items endpoint (has Query parameters) from sample_fastapi.py specifically
     endpoint = None
     for ep in result.endpoints:
         if (
-            ep.path == "/items"
+            ep.path == "/api/items"
             and ep.method == HTTPMethod.GET
             and "sample_fastapi.py" in ep.source_file
         ):
             endpoint = ep
             break
 
-    assert endpoint is not None, "GET /items endpoint not found in sample_fastapi.py"
+    assert endpoint is not None, "GET /api/items endpoint not found in sample_fastapi.py"
 
     # Find query parameters
     query_params = [p for p in endpoint.parameters if p.location.value == "query"]
@@ -133,26 +113,19 @@ def test_fastapi_query_parameters():
 
 def test_fastapi_header_parameters():
     """Test Header parameter extraction."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_fastapi.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_fastapi.py")
 
     extractor = FastAPIExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))
 
-    # Find GET /users/{user_id} endpoint (has Header parameter)
+    # Find GET /api/users/{user_id} endpoint (has Header parameter)
     endpoint = None
     for ep in result.endpoints:
-        if ep.path == "/users/{user_id}" and ep.method == HTTPMethod.GET:
+        if ep.path == "/api/users/{user_id}" and ep.method == HTTPMethod.GET:
             endpoint = ep
             break
 
-    assert endpoint is not None, "GET /users/{user_id} endpoint not found"
+    assert endpoint is not None, "GET /api/users/{user_id} endpoint not found"
 
     # Find header parameters
     header_params = [p for p in endpoint.parameters if p.location.value == "header"]
@@ -262,14 +235,7 @@ def get_user(user_id: int):
 
 def test_fastapi_mixed_parameters():
     """Test endpoint with path, query, and header parameters."""
-    fixture_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "fixtures",
-        "minimal",
-        "python",
-        "sample_fastapi.py",
-    )
+    fixture_path = str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python" / "sample_fastapi.py")
 
     extractor = FastAPIExtractor()
     result = extractor.extract(os.path.dirname(fixture_path))

@@ -125,6 +125,8 @@ def test_spring_boot_real_world_extraction(extractor):
         Path(__file__).parent.parent
         / "fixtures"
         / "real-world"
+        / "java"
+        / "spring-boot"
         / "spring-boot-realworld-example-app"
         / "src"
         / "main"

@@ -48,7 +48,7 @@ def test_nestjs_realworld_extraction(nestjs_realworld_path):
 
     # User/authentication endpoints
     user_endpoints = [ep for ep in result.endpoints if "user" in ep.path.lower()]
-    assert len(user_endpoints) == 2
+    assert len(user_endpoints) == 8
 
     # Article endpoints (core functionality)
     article_endpoints = [ep for ep in result.endpoints if "article" in ep.path.lower()]
