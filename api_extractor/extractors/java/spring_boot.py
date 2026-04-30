@@ -223,7 +223,7 @@ class SpringBootExtractor(BaseExtractor):
         (method_declaration
           (modifiers) @modifiers
           name: (identifier) @method_name
-          parameters: (formal_parameters) @params)
+          parameters: (formal_parameters) @params) @method_decl
         """
 
         methods = self.parser.query(tree, method_query, "java")
@@ -232,8 +232,9 @@ class SpringBootExtractor(BaseExtractor):
             modifiers_node = match.get("modifiers")
             method_name_node = match.get("method_name")
             params_node = match.get("params")
+            method_decl_node = match.get("method_decl")
 
-            if not modifiers_node or not method_name_node:
+            if not modifiers_node or not method_name_node or not method_decl_node:
                 continue
 
             # Check if this method is inside our class body
@@ -257,6 +258,11 @@ class SpringBootExtractor(BaseExtractor):
             # Extract parameters
             parameters = self._extract_method_parameters(params_node, source_code)
 
+            # Link method schemas (request body and response)
+            schema_metadata = self._link_method_schemas(
+                method_decl_node, params_node, source_code, dto_classes
+            )
+
             # Extract source location
             source_line = method_name_node.start_point[0] + 1
 
@@ -273,6 +279,7 @@ class SpringBootExtractor(BaseExtractor):
                     metadata={
                         "parameters": parameters,
                         "dto_classes": dto_classes,
+                        **schema_metadata,  # Merge schema metadata
                     },
                 )
                 routes.append(route)
@@ -395,25 +402,43 @@ class SpringBootExtractor(BaseExtractor):
 
             # Determine parameter location based on annotations
             if any("@PathVariable" in ann for ann in param_annotations):
+                # Extract parameter name from annotation value if present
+                # @PathVariable("id") or @PathVariable(value = "id")
+                annotation_param_name = None
+                for ann in param_annotations:
+                    if "@PathVariable" in ann:
+                        annotation_param_name = self._extract_annotation_value(ann)
+                        break
+
+                # Use annotation value if present, otherwise use variable name
+                final_param_name = annotation_param_name if annotation_param_name else param_name
+
                 parameters.append(
                     self._create_parameter(
-                        name=param_name,
+                        name=final_param_name,
                         location=ParameterLocation.PATH,
                         param_type=param_type,
                         required=True,
                     )
                 )
             elif any("@RequestParam" in ann for ann in param_annotations):
-                # Check if required
+                # Extract parameter name from annotation value if present
+                # @RequestParam("query") or @RequestParam(value = "query")
+                annotation_param_name = None
                 required = True
                 for ann in param_annotations:
-                    if "@RequestParam" in ann and "required = false" in ann:
-                        required = False
-                        break
+                    if "@RequestParam" in ann:
+                        if not annotation_param_name:
+                            annotation_param_name = self._extract_annotation_value(ann)
+                        if "required = false" in ann or "required=false" in ann:
+                            required = False
+
+                # Use annotation value if present, otherwise use variable name
+                final_param_name = annotation_param_name if annotation_param_name else param_name
 
                 parameters.append(
                     self._create_parameter(
-                        name=param_name,
+                        name=final_param_name,
                         location=ParameterLocation.QUERY,
                         param_type=param_type,
                         required=required,
@@ -424,6 +449,35 @@ class SpringBootExtractor(BaseExtractor):
                 pass
 
         return parameters
+
+    def _extract_annotation_value(self, annotation: str) -> str | None:
+        """
+        Extract value from annotation like @PathVariable("id") or @RequestParam(value = "query").
+
+        Args:
+            annotation: Annotation string
+
+        Returns:
+            Extracted value or None if not found
+        """
+        import re
+
+        # Try to match @Annotation("value")
+        match = re.search(r'@\w+\("([^"]+)"\)', annotation)
+        if match:
+            return match.group(1)
+
+        # Try to match @Annotation(value = "value")
+        match = re.search(r'@\w+\(value\s*=\s*"([^"]+)"\)', annotation)
+        if match:
+            return match.group(1)
+
+        # Try to match @Annotation(name = "value") - alternative parameter name
+        match = re.search(r'@\w+\(name\s*=\s*"([^"]+)"\)', annotation)
+        if match:
+            return match.group(1)
+
+        return None
 
     def _parse_java_type(self, type_text: str) -> str:
         """
@@ -572,6 +626,166 @@ class SpringBootExtractor(BaseExtractor):
 
         return None
 
+    def _extract_return_type(
+        self, method_node: Node, source_code: bytes
+    ) -> Optional[str]:
+        """
+        Extract return type from Java method declaration.
+
+        Handles generic types like:
+        - User
+        - List<User>
+        - ResponseEntity<Product>
+        - Optional<User>
+
+        Args:
+            method_node: Method declaration node
+            source_code: Source code bytes
+
+        Returns:
+            Return type string, or None if not found
+        """
+        # Find the type node (return type) in method declaration
+        for child in method_node.children:
+            if child.type in ("type_identifier", "generic_type", "integral_type",
+                            "floating_point_type", "boolean_type", "void_type"):
+                return self.parser.get_node_text(child, source_code)
+
+        return None
+
+    def _resolve_generic_type(self, type_text: str) -> Tuple[str, Optional[str]]:
+        """
+        Parse generic type to extract base and inner type.
+
+        Examples:
+            - List<User> → ('List', 'User')
+            - ResponseEntity<Product> → ('ResponseEntity', 'Product')
+            - Optional<User> → ('Optional', 'User')
+            - User → ('User', None)
+
+        Args:
+            type_text: Generic type string
+
+        Returns:
+            Tuple of (base_type, inner_type)
+        """
+        from api_extractor.extractors.schema_utils import resolve_generic_type_recursive
+
+        base_type, type_args = resolve_generic_type_recursive(type_text)
+
+        if type_args:
+            # Return first type argument as inner type
+            return (base_type, type_args[0])
+
+        return (base_type, None)
+
+    def _link_method_schemas(
+        self,
+        method_node: Node,
+        params_node: Node,
+        source_code: bytes,
+        dto_classes: Dict[str, Schema]
+    ) -> Dict[str, Any]:
+        """
+        Link method parameters and return type to schemas.
+
+        Extracts:
+        - Request body from @RequestBody parameter
+        - Response schema from return type
+
+        Args:
+            method_node: Method declaration node
+            params_node: Formal parameters node
+            source_code: Source code bytes
+            dto_classes: Dictionary of DTO schemas
+
+        Returns:
+            Dict with request_body, response_schema, and type names
+        """
+        from api_extractor.extractors.schema_utils import (
+            strip_wrapper_types,
+            is_collection_type,
+            wrap_array_schema,
+            normalize_type_name
+        )
+
+        metadata = {}
+
+        # Extract return type
+        return_type_raw = self._extract_return_type(method_node, source_code)
+        if return_type_raw and return_type_raw != "void":
+            # Strip wrapper types like ResponseEntity, Optional
+            return_type = strip_wrapper_types(return_type_raw, language='java')
+
+            # Normalize type name
+            return_type = normalize_type_name(return_type, language='java')
+
+            # Store type name for later resolution
+            metadata["response_type_name"] = return_type
+
+            # Check if it's a collection type
+            if is_collection_type(return_type, language='java'):
+                # Extract inner type from List<User> → User
+                _, inner_type = self._resolve_generic_type(return_type)
+                if inner_type:
+                    inner_type = normalize_type_name(inner_type, language='java')
+                    # Try to find schema for inner type
+                    if inner_type in dto_classes:
+                        # Wrap in array schema
+                        metadata["response_schema"] = wrap_array_schema(dto_classes[inner_type])
+                    else:
+                        metadata["response_type_name"] = inner_type
+                        metadata["is_array_response"] = True
+            else:
+                # Try to find schema directly
+                if return_type in dto_classes:
+                    metadata["response_schema"] = dto_classes[return_type]
+
+        # Extract @RequestBody parameter type
+        for child in params_node.children:
+            if child.type != "formal_parameter":
+                continue
+
+            # Look for @RequestBody annotation
+            has_request_body = False
+            param_type = None
+
+            for param_child in child.children:
+                if param_child.type == "modifiers":
+                    for annotation_child in param_child.children:
+                        if annotation_child.type in ("marker_annotation", "annotation"):
+                            annotation_text = self.parser.get_node_text(annotation_child, source_code)
+                            if "@RequestBody" in annotation_text:
+                                has_request_body = True
+
+                if param_child.type in ("type_identifier", "generic_type"):
+                    param_type = self.parser.get_node_text(param_child, source_code)
+
+            if has_request_body and param_type:
+                # Normalize type name
+                param_type = normalize_type_name(param_type, language='java')
+
+                # Store type name for later resolution
+                metadata["request_body_type_name"] = param_type
+
+                # Try to find schema
+                if param_type in dto_classes:
+                    metadata["request_body"] = dto_classes[param_type]
+                elif is_collection_type(param_type, language='java'):
+                    # Extract inner type from List<User> → User
+                    _, inner_type = self._resolve_generic_type(param_type)
+                    if inner_type:
+                        inner_type = normalize_type_name(inner_type, language='java')
+                        if inner_type in dto_classes:
+                            metadata["request_body"] = wrap_array_schema(dto_classes[inner_type])
+                        else:
+                            metadata["request_body_type_name"] = inner_type
+                            metadata["is_array_request"] = True
+
+                break  # Only one @RequestBody per method
+
+        return metadata
+
     def _normalize_path(self, path: str) -> str:
         """
         Normalize Spring Boot path to OpenAPI format.
@@ -611,3 +825,89 @@ class SpringBootExtractor(BaseExtractor):
             )
 
         return params
+
+    def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
+        """
+        Convert a Route to one or more Endpoint objects with schema support.
+
+        Args:
+            route: Route object with schema metadata
+
+        Returns:
+            List of Endpoint objects (one per HTTP method)
+        """
+        endpoints = []
+
+        for method in route.methods:
+            # Parse path parameters
+            path_parameters = self._extract_path_parameters(route.raw_path)
+
+            # Add query/header parameters from metadata if available
+            # Use dict to deduplicate by (name, location)
+            param_dict = {}
+
+            # First add path parameters
+            for param in path_parameters:
+                key = (param.name, param.location.value)
+                param_dict[key] = param
+
+            # Then add metadata parameters (which override path params if duplicate)
+            # Metadata params have more info (type from annotations)
+            if route.metadata and "parameters" in route.metadata:
+                for param in route.metadata["parameters"]:
+                    key = (param.name, param.location.value)
+                    param_dict[key] = param
+
+            # Convert back to list
+            all_parameters = list(param_dict.values())
+
+            # Create default response
+            responses = [
+                Response(
+                    status_code="200",
+                    description="Success",
+                    content_type="application/json",
+                )
+            ]
+
+            # Add response schema if available
+            if route.metadata and "response_schema" in route.metadata:
+                responses[0].response_schema = route.metadata["response_schema"]
+
+            # Extract request body schema from metadata
+            request_body = None
+            if route.metadata and "request_body" in route.metadata:
+                request_body = route.metadata["request_body"]
+
+            # Generate unique operation ID
+            # OpenAPI requires operation IDs to be unique across all operations
+            normalized_path = self._normalize_path(route.raw_path)
+            clean_path = normalized_path.replace("{", "").replace("}", "").replace("/", "_")
+            clean_path = clean_path.lstrip("_")
+            if not normalized_path.endswith("/") or normalized_path == "/":
+                clean_path = clean_path.rstrip("_")
+
+            method_lower = method.value.lower()
+
+            if route.handler_name == "<anonymous>":
+                # Anonymous handler: method_path
+                operation_id = f"{method_lower}_{clean_path}" if clean_path else method_lower
+            else:
+                # Named handler: handler_method_path
+                operation_id = f"{route.handler_name}_{method_lower}_{clean_path}" if clean_path else f"{route.handler_name}_{method_lower}"
+
+            endpoint = Endpoint(
+                path=normalized_path,
+                method=method,
+                parameters=all_parameters,
+                request_body=request_body,
+                responses=responses,
+                tags=[self.framework.value],
+                operation_id=operation_id,
+                source_file=route.source_file,
+                source_line=route.source_line,
+            )
+
+            endpoints.append(endpoint)
+
+        return endpoints

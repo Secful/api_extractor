@@ -91,13 +91,50 @@ class BaseExtractor(ABC):
             except Exception as e:
                 self.errors.append(f"Error converting route {route.path}: {str(e)}")
 
+        # Validate OpenAPI spec if endpoints were extracted
+        if self.endpoints:
+            validation_errors = self._validate_openapi_spec()
+            if validation_errors:
+                self.errors.extend(validation_errors)
+
         return ExtractionResult(
-            success=len(self.endpoints) > 0,
+            success=len(self.endpoints) > 0 and len(self.errors) == 0,
             endpoints=self.endpoints,
             errors=self.errors,
             warnings=self.warnings,
             frameworks_detected=[self.framework],
         )
+
+    def _validate_openapi_spec(self) -> List[str]:
+        """
+        Validate the extracted endpoints against OpenAPI 3.1.0 specification.
+
+        Returns:
+            List of validation error messages (empty if valid)
+        """
+        try:
+            from openapi_spec_validator import validate
+            from api_extractor.openapi.builder import OpenAPIBuilder
+
+            # Generate OpenAPI spec from endpoints
+            builder = OpenAPIBuilder(
+                title=f"{self.framework.value} API",
+                version="1.0.0",
+                description="Extracted API"
+            )
+            spec = builder.build(self.endpoints)
+            spec_dict = spec.model_dump(exclude_none=True, by_alias=True)
+
+            # Validate the spec
+            validate(spec_dict)
+            return []
+
+        except ImportError:
+            # openapi-spec-validator not installed, skip validation
+            return []
+        except Exception as e:
+            error_msg = str(e)
+            return [f"OpenAPI validation failed: {error_msg}"]
 
     def _find_source_files(self, path: str) -> List[str]:
         """

@@ -817,14 +817,31 @@ class NestJSExtractor(BaseExtractor):
                     )
                 ]
 
+            # Generate unique operation ID
+            # OpenAPI requires operation IDs to be unique across all operations
+            normalized_path = self._normalize_path(route.raw_path)
+            clean_path = normalized_path.replace("{", "").replace("}", "").replace("/", "_")
+            clean_path = clean_path.lstrip("_")
+            if not normalized_path.endswith("/") or normalized_path == "/":
+                clean_path = clean_path.rstrip("_")
+
+            method_lower = method.value.lower()
+
+            if route.handler_name == "<anonymous>":
+                # Anonymous handler: method_path
+                operation_id = f"{method_lower}_{clean_path}" if clean_path else method_lower
+            else:
+                # Named handler: handler_method_path
+                operation_id = f"{route.handler_name}_{method_lower}_{clean_path}" if clean_path else f"{route.handler_name}_{method_lower}"
+
             endpoint = Endpoint(
-                path=self._normalize_path(route.raw_path),
+                path=normalized_path,
                 method=method,
                 parameters=parameters,
                 request_body=request_body,
                 responses=responses,
                 tags=[self.framework.value],
-                operation_id=route.handler_name,
+                operation_id=operation_id,
                 source_file=route.source_file,
                 source_line=route.source_line,
             )

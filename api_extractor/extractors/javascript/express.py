@@ -229,21 +229,65 @@ class ExpressExtractor(BaseExtractor):
         Extract path parameters from Express path.
 
         Express uses :paramName syntax.
+        Also handles {{param}} template syntax and {param} OpenAPI format.
 
         Args:
-            path: Route path
+            route path
 
         Returns:
             List of Parameter objects
         """
         parameters = []
+        seen_params = set()
 
-        # Find all :param patterns
+        # Find all :param patterns (Express format)
         pattern = r":([a-zA-Z_][a-zA-Z0-9_]*)"
         matches = re.finditer(pattern, path)
 
         for match in matches:
             param_name = match.group(1)
+
+            if param_name in seen_params:
+                continue
+            seen_params.add(param_name)
+
+            param = self._create_parameter(
+                name=param_name,
+                location="path",
+                param_type="string",
+                required=True,
+            )
+            parameters.append(param)
+
+        # Find all {{param}} patterns (template/mustache format)
+        template_pattern = r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}"
+        template_matches = re.finditer(template_pattern, path)
+
+        for match in template_matches:
+            param_name = match.group(1)
+
+            if param_name in seen_params:
+                continue
+            seen_params.add(param_name)
+
+            param = self._create_parameter(
+                name=param_name,
+                location="path",
+                param_type="string",
+                required=True,
+            )
+            parameters.append(param)
+
+        # Find all {param} patterns (OpenAPI format)
+        openapi_pattern = r"(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})"
+        openapi_matches = re.finditer(openapi_pattern, path)
+
+        for match in openapi_matches:
+            param_name = match.group(1)
+
+            if param_name in seen_params:
+                continue
+            seen_params.add(param_name)
 
             param = self._create_parameter(
                 name=param_name,
@@ -260,6 +304,8 @@ class ExpressExtractor(BaseExtractor):
         Normalize Express path to OpenAPI format.
 
         Convert :param to {param}.
+        Convert {{param}} (template syntax) to {param}.
+        Handle edge cases like wildcards, optional segments, and embedded braces.
 
         Args:
             path: Express path
@@ -269,6 +315,35 @@ class ExpressExtractor(BaseExtractor):
         """
         # Replace :param with {param}
         normalized = re.sub(r":([a-zA-Z_][a-zA-Z0-9_]*)", r"{\1}", path)
+        # Replace {{param}} (template/mustache syntax) with {param}
+        normalized = re.sub(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}", r"{\1}", normalized)
+
+        # Handle wildcard patterns: /*param or /{/*param} -> /{param}
+        normalized = re.sub(r'/\*([a-zA-Z_][a-zA-Z0-9_]*)', r'/{\1}', normalized)
+        normalized = re.sub(r'/\{/\*([a-zA-Z_][a-zA-Z0-9_]*)\}', r'/{\1}', normalized)
+
+        # Handle optional segments with nested braces: /{name}{.{format}} -> /{name}/{format}
+        normalized = re.sub(r'\{([a-zA-Z_][a-zA-Z0-9_]*)\}\{\.?\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}', r'{\1}/{\2}', normalized)
+
+        # Handle optional segments: /user{/{op}} -> /user/{op}
+        normalized = re.sub(r'\{/\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}', r'/{\1}', normalized)
+
+        # Handle embedded braces: /user{s} -> /users (remove single char params embedded in text)
+        # This handles patterns like /user{s} or /path{optional}
+        normalized = re.sub(r'([a-z]+)\{([a-zA-Z0-9_]+)\}', r'\1\2', normalized)
+
+        # Handle dots/special chars between params: /{from}..{to} -> /{from}/{to}
+        normalized = re.sub(r'\}[.]+\{', '}/{', normalized)
+        # Handle single dots between params: /{name}.{format} -> /{name}/{format}
+        normalized = re.sub(r'\}\.\{', '}/{', normalized)
+
+        # Unescape backslashes: \\( -> (
+        normalized = normalized.replace('\\\\', '')
+
+        # Remove any remaining regex-style patterns that aren't valid OpenAPI
+        # Remove patterns like (text) that might be regex groups
+        normalized = re.sub(r'\([^)]*\)', '', normalized)
+
         return normalized
 
     def _compose_paths(self, prefix: str, path: str) -> str:
@@ -802,8 +877,15 @@ class ExpressExtractor(BaseExtractor):
         endpoints = []
 
         for method in route.methods:
-            # Parse path parameters
-            parameters = self._extract_path_parameters(route.raw_path)
+            # Normalize path first to ensure consistent parameter extraction
+            normalized_path = self._normalize_path(route.raw_path)
+
+            # Skip invalid paths that don't start with / (invalid OpenAPI format)
+            if not normalized_path.startswith('/'):
+                continue
+
+            # Parse path parameters from normalized path
+            parameters = self._extract_path_parameters(normalized_path)
 
             # Add query parameters from metadata
             if "query_params" in route.metadata:
@@ -826,7 +908,7 @@ class ExpressExtractor(BaseExtractor):
             ]
 
             endpoint = Endpoint(
-                path=self._normalize_path(route.raw_path),
+                path=normalized_path,
                 method=method,
                 parameters=parameters,
                 request_body=request_body,

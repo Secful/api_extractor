@@ -529,6 +529,7 @@ class FlaskExtractor(BaseExtractor):
         Extract path parameters from Flask path.
 
         Flask uses <type:param_name> or <param_name> syntax.
+        Also handles OpenAPI {param} format for normalized paths.
 
         Args:
             path: Route path
@@ -537,14 +538,19 @@ class FlaskExtractor(BaseExtractor):
             List of Parameter objects
         """
         parameters = []
+        seen_params = set()
 
-        # Find all <param> patterns
-        pattern = r"<(?:([^:>]+):)?([^>]+)>"
-        matches = re.finditer(pattern, path)
+        # Find all <param> patterns (Flask format)
+        flask_pattern = r"<(?:([^:>]+):)?([^>]+)>"
+        matches = re.finditer(flask_pattern, path)
 
         for match in matches:
             param_type = match.group(1) if match.group(1) else "string"
             param_name = match.group(2)
+
+            if param_name in seen_params:
+                continue
+            seen_params.add(param_name)
 
             # Map Flask types to OpenAPI types
             type_map = {
@@ -561,6 +567,25 @@ class FlaskExtractor(BaseExtractor):
                 name=param_name,
                 location="path",
                 param_type=openapi_type,
+                required=True,
+            )
+            parameters.append(param)
+
+        # Also find {param} patterns (OpenAPI format) in case path is already normalized
+        openapi_pattern = r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}"
+        openapi_matches = re.finditer(openapi_pattern, path)
+
+        for match in openapi_matches:
+            param_name = match.group(1)
+
+            if param_name in seen_params:
+                continue
+            seen_params.add(param_name)
+
+            param = self._create_parameter(
+                name=param_name,
+                location="path",
+                param_type="string",
                 required=True,
             )
             parameters.append(param)
@@ -835,14 +860,31 @@ class FlaskExtractor(BaseExtractor):
                     )
                 )
 
+            # Generate unique operation ID
+            # OpenAPI requires operation IDs to be unique across all operations
+            normalized_path = self._normalize_path(route.raw_path)
+            clean_path = normalized_path.replace("{", "").replace("}", "").replace("/", "_")
+            clean_path = clean_path.lstrip("_")
+            if not normalized_path.endswith("/") or normalized_path == "/":
+                clean_path = clean_path.rstrip("_")
+
+            method_lower = method.value.lower()
+
+            if route.handler_name == "<anonymous>":
+                # Anonymous handler: method_path
+                operation_id = f"{method_lower}_{clean_path}" if clean_path else method_lower
+            else:
+                # Named handler: handler_method_path
+                operation_id = f"{route.handler_name}_{method_lower}_{clean_path}" if clean_path else f"{route.handler_name}_{method_lower}"
+
             endpoint = Endpoint(
-                path=self._normalize_path(route.raw_path),
+                path=normalized_path,
                 method=method,
                 parameters=parameters,
                 request_body=request_body,
                 responses=responses,
                 tags=[self.framework.value],
-                operation_id=route.handler_name,
+                operation_id=operation_id,
                 source_file=route.source_file,
                 source_line=route.source_line,
             )

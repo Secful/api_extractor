@@ -361,6 +361,9 @@ class ASPNETCoreExtractor(BaseExtractor):
         # Normalize path (remove constraints like {id:int})
         normalized_path = self._normalize_path(full_path)
 
+        # Link method schemas (request body and response)
+        schema_metadata = self._link_method_schemas(method_node, source_code, dto_schemas)
+
         # Create route
         route = Route(
             path=normalized_path,
@@ -370,7 +373,10 @@ class ASPNETCoreExtractor(BaseExtractor):
             raw_path=full_path,
             source_file=file_path,
             source_line=method_node.start_point[0] + 1,
-            metadata={},
+            metadata={
+                "dto_schemas": dto_schemas,
+                **schema_metadata,  # Merge schema metadata
+            },
         )
 
         return route
@@ -415,19 +421,28 @@ class ASPNETCoreExtractor(BaseExtractor):
 
     def _normalize_path(self, path: str) -> str:
         """
-        Normalize path by removing type constraints.
+        Normalize path by removing type constraints and optional markers.
 
-        Example: {id:int} → {id}, {slug:regex(...)} → {slug}
+        Examples:
+        - {id:int} → {id}
+        - {slug:regex(...)} → {slug}
+        - {brandId?} → {brandId}
+        - {id:int?} → {id}
 
         Args:
-            path: Path with potential constraints
+            path: Path with potential constraints and optional markers
 
         Returns:
             Normalized path
         """
         # Remove type constraints: {param:type} → {param}
+        # This also handles {param:type?} → {param?}
         pattern = r"\{([^:}]+):[^}]+\}"
         normalized = re.sub(pattern, r"{\1}", path)
+
+        # Remove optional markers: {param?} → {param}
+        normalized = re.sub(r"\{([^}]+)\?\}", r"{\1}", normalized)
+
         return normalized
 
     def _combine_paths(self, base_path: str, method_path: str) -> str:
@@ -456,24 +471,41 @@ class ASPNETCoreExtractor(BaseExtractor):
         """
         Extract path parameters from route path.
 
+        Handles ASP.NET Core optional parameter syntax:
+        - {id} → required parameter named 'id'
+        - {id?} → optional parameter named 'id'
+        - {id:int} → required parameter named 'id' with constraint
+        - {id:int?} → optional parameter named 'id' with constraint
+
         Args:
             path: Route path with {param} placeholders
 
         Returns:
             List of path parameters
         """
-        # Match {param} or {param:constraint}
-        pattern = r"\{([^:}]+)(?::[^}]+)?\}"
+        # Match {param} or {param:constraint} or {param?} or {param:constraint?}
+        # Capture: param name and optional marker (?)
+        # Pattern explanation:
+        # \{ - opening brace
+        # ([^:}?]+) - capture param name (everything before :, }, or ?)
+        # (?::[^}?]+)? - optionally match constraint (:anything_except_}_or_?)
+        # (\?)? - optionally capture the ? marker
+        # \} - closing brace
+        pattern = r"\{([^:}?]+)(?::[^}?]+)?(\?)?\}"
         matches = re.findall(pattern, path)
 
         parameters = []
-        for param_name in matches:
+        for param_name, optional_marker in matches:
+            # NOTE: In OpenAPI, path parameters MUST always be required=True.
+            # The ? in ASP.NET Core routes indicates optional routing segments,
+            # but OpenAPI doesn't support optional path parameters.
+            # We strip the ? from the name and path, but keep required=True.
             parameters.append(
                 Parameter(
                     name=param_name,
                     location=ParameterLocation.PATH,
                     type="string",
-                    required=True,
+                    required=True,  # OpenAPI spec requires path params to be required
                 )
             )
 
@@ -726,6 +758,179 @@ class ASPNETCoreExtractor(BaseExtractor):
             "required": not nullable,
         }
 
+    def _extract_return_type(
+        self, method_node: Node, source_code: bytes
+    ) -> Optional[str]:
+        """
+        Extract return type from C# method declaration.
+
+        Handles types like:
+        - User
+        - Task<User>
+        - ActionResult<Product>
+        - Task<ActionResult<Product>>
+        - IEnumerable<Product>
+
+        Args:
+            method_node: Method declaration node
+            source_code: Source code bytes
+
+        Returns:
+            Return type string, or None if not found
+        """
+        # Find return type - it's usually the first type-related node
+        for child in method_node.children:
+            if child.type in ("predefined_type", "identifier", "generic_name", "nullable_type"):
+                return self.parser.get_node_text(child, source_code)
+
+        return None
+
+    def _resolve_generic_type(self, type_text: str) -> tuple[str, Optional[str]]:
+        """
+        Parse generic type to extract base and inner type.
+
+        Examples:
+            - Task<User> → ('Task', 'User')
+            - ActionResult<Product> → ('ActionResult', 'Product')
+            - IEnumerable<User> → ('IEnumerable', 'User')
+            - User → ('User', None)
+
+        Args:
+            type_text: Generic type string
+
+        Returns:
+            Tuple of (base_type, inner_type)
+        """
+        from api_extractor.extractors.schema_utils import resolve_generic_type_recursive
+
+        base_type, type_args = resolve_generic_type_recursive(type_text)
+
+        if type_args:
+            # Return first type argument as inner type
+            return (base_type, type_args[0])
+
+        return (base_type, None)
+
+    def _link_method_schemas(
+        self,
+        method_node: Node,
+        source_code: bytes,
+        dto_schemas: Dict[str, Schema]
+    ) -> Dict[str, any]:
+        """
+        Link method parameters and return type to schemas.
+
+        Extracts:
+        - Request body from [FromBody] parameter
+        - Response schema from return type
+
+        Args:
+            method_node: Method declaration node
+            source_code: Source code bytes
+            dto_schemas: Dictionary of DTO schemas
+
+        Returns:
+            Dict with request_body, response_schema, and type names
+        """
+        from api_extractor.extractors.schema_utils import (
+            strip_wrapper_types,
+            is_collection_type,
+            wrap_array_schema,
+            normalize_type_name
+        )
+
+        metadata = {}
+
+        # Extract return type
+        return_type_raw = self._extract_return_type(method_node, source_code)
+        if return_type_raw and return_type_raw not in ("void", "IActionResult"):
+            # Strip wrapper types like Task, ActionResult
+            return_type = strip_wrapper_types(return_type_raw, language='csharp')
+
+            # Normalize type name
+            return_type = normalize_type_name(return_type, language='csharp')
+
+            # Store type name for later resolution
+            metadata["response_type_name"] = return_type
+
+            # Check if it's a collection type
+            if is_collection_type(return_type, language='csharp'):
+                # Extract inner type from List<User> → User
+                _, inner_type = self._resolve_generic_type(return_type)
+                if inner_type:
+                    inner_type = normalize_type_name(inner_type, language='csharp')
+                    # Try to find schema for inner type
+                    if inner_type in dto_schemas:
+                        # Wrap in array schema
+                        metadata["response_schema"] = wrap_array_schema(dto_schemas[inner_type])
+                    else:
+                        metadata["response_type_name"] = inner_type
+                        metadata["is_array_response"] = True
+            else:
+                # Try to find schema directly
+                if return_type in dto_schemas:
+                    metadata["response_schema"] = dto_schemas[return_type]
+
+        # Extract [FromBody] parameter type
+        # Find parameter_list node
+        param_list_node = None
+        for child in method_node.children:
+            if child.type == "parameter_list":
+                param_list_node = child
+                break
+
+        if param_list_node:
+            for param_child in param_list_node.children:
+                if param_child.type == "parameter":
+                    # Check for [FromBody] attribute
+                    has_from_body = False
+                    param_type = None
+                    found_first_identifier = False
+
+                    for param_part in param_child.children:
+                        if param_part.type == "attribute_list":
+                            for attr in param_part.children:
+                                if attr.type == "attribute":
+                                    for attr_part in attr.children:
+                                        if attr_part.type == "identifier":
+                                            attr_name = self.parser.get_node_text(attr_part, source_code)
+                                            if attr_name == "FromBody":
+                                                has_from_body = True
+
+                        # For C#, parameter structure is: type identifier_name
+                        # We want the first identifier (type), not the second (variable name)
+                        if param_part.type in ("predefined_type", "generic_name", "nullable_type"):
+                            param_type = self.parser.get_node_text(param_part, source_code)
+                        elif param_part.type == "identifier" and not found_first_identifier and param_type is None:
+                            # This is the type identifier (first one)
+                            param_type = self.parser.get_node_text(param_part, source_code)
+                            found_first_identifier = True
+
+                    if has_from_body and param_type:
+                        # Normalize type name
+                        param_type = normalize_type_name(param_type, language='csharp')
+
+                        # Store type name for later resolution
+                        metadata["request_body_type_name"] = param_type
+
+                        # Try to find schema
+                        if param_type in dto_schemas:
+                            metadata["request_body"] = dto_schemas[param_type]
+                        elif is_collection_type(param_type, language='csharp'):
+                            # Extract inner type from List<User> → User
+                            _, inner_type = self._resolve_generic_type(param_type)
+                            if inner_type:
+                                inner_type = normalize_type_name(inner_type, language='csharp')
+                                if inner_type in dto_schemas:
+                                    metadata["request_body"] = wrap_array_schema(dto_schemas[inner_type])
+                                else:
+                                    metadata["request_body_type_name"] = inner_type
+                                    metadata["is_array_request"] = True
+
+                        break  # Only one [FromBody] per method
+
+        return metadata
+
     def _extract_minimal_api_routes(
         self, tree, source_code: bytes, file_path: str
     ) -> List[Route]:
@@ -907,6 +1112,74 @@ class ASPNETCoreExtractor(BaseExtractor):
             return text[1:-1]
 
         return text
+
+    def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
+        """
+        Convert a Route to one or more Endpoint objects with schema support.
+
+        Args:
+            route: Route object with schema metadata
+
+        Returns:
+            List of Endpoint objects (one per HTTP method)
+        """
+        endpoints = []
+
+        for method in route.methods:
+            # Parse path parameters from raw_path to preserve optional markers (?)
+            # Use raw_path if available, otherwise fall back to normalized path
+            path_for_params = route.raw_path or route.path
+            path_parameters = self._extract_path_parameters(path_for_params)
+
+            # Create default response
+            responses = [
+                Response(
+                    status_code="200",
+                    description="Success",
+                    content_type="application/json",
+                )
+            ]
+
+            # Add response schema if available
+            if route.metadata and "response_schema" in route.metadata:
+                responses[0].response_schema = route.metadata["response_schema"]
+
+            # Extract request body schema from metadata
+            request_body = None
+            if route.metadata and "request_body" in route.metadata:
+                request_body = route.metadata["request_body"]
+
+            # Generate unique operation ID
+            # OpenAPI requires operation IDs to be unique across all operations
+            clean_path = route.path.replace("{", "").replace("}", "").replace("/", "_")
+            clean_path = clean_path.lstrip("_")
+            if not route.path.endswith("/") or route.path == "/":
+                clean_path = clean_path.rstrip("_")
+
+            method_lower = method.value.lower()
+
+            if route.handler_name == "<anonymous>":
+                # Anonymous handler: method_path
+                operation_id = f"{method_lower}_{clean_path}" if clean_path else method_lower
+            else:
+                # Named handler: handler_method_path
+                operation_id = f"{route.handler_name}_{method_lower}_{clean_path}" if clean_path else f"{route.handler_name}_{method_lower}"
+
+            endpoint = Endpoint(
+                path=route.path,
+                method=method,
+                parameters=path_parameters,
+                request_body=request_body,
+                responses=responses,
+                tags=[self.framework.value],
+                operation_id=operation_id,
+                source_file=route.source_file,
+                source_line=route.source_line,
+            )
+
+            endpoints.append(endpoint)
+
+        return endpoints
 
     def convert_route_to_endpoint(self, route: Route) -> Endpoint:
         """
