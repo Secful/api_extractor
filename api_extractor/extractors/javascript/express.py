@@ -15,6 +15,12 @@ from api_extractor.core.models import (
     Response,
     ParameterLocation,
 )
+from api_extractor.extractors.javascript.validation import (
+    JoiParser,
+    JSONSchemaParser,
+    ZodParser,
+    ValidationSchema,
+)
 
 
 class ExpressExtractor(BaseExtractor):
@@ -27,6 +33,10 @@ class ExpressExtractor(BaseExtractor):
         """Initialize Express extractor."""
         super().__init__(FrameworkType.EXPRESS)
         self.routers: Dict[str, str] = {}  # router_var -> mount_path
+        self.validation_schemas: Dict[str, ValidationSchema] = {}  # schema_name -> ValidationSchema
+        self.joi_parser: Optional[JoiParser] = None
+        self.zod_parser: Optional[ZodParser] = None
+        self.json_schema_parser: Optional[JSONSchemaParser] = None
 
     def get_file_extensions(self) -> List[str]:
         """Get JavaScript file extensions."""
@@ -62,6 +72,9 @@ class ExpressExtractor(BaseExtractor):
         interfaces = {}
         if is_typescript:
             interfaces = self._find_interfaces(tree, source_code)
+
+        # Extract validation schemas (Joi/Zod)
+        self._detect_and_extract_validation_schemas(tree, source_code, language, file_path)
 
         # First pass: Find router creation and mounting using queries
         self._extract_routers_query(tree, source_code, language)
@@ -134,6 +147,13 @@ class ExpressExtractor(BaseExtractor):
                 handler_node = self._find_handler_function(arg_nodes)
                 if handler_node:
                     metadata = self._extract_javascript_metadata(handler_node, source_code)
+
+            # Extract validation schemas from middleware chain
+            validation_metadata = self._extract_validation_from_middleware(
+                arg_nodes, source_code
+            )
+            if validation_metadata:
+                metadata.update(validation_metadata)
 
             # Create route
             http_method = HTTPMethod[method_name.upper()]
@@ -922,3 +942,300 @@ class ExpressExtractor(BaseExtractor):
             endpoints.append(endpoint)
 
         return endpoints
+
+    def _detect_and_extract_validation_schemas(
+        self, tree, source_code: bytes, language: str, file_path: str
+    ) -> None:
+        """
+        Detect validation libraries and extract schemas.
+
+        Args:
+            tree: Tree-sitter syntax tree
+            source_code: Source code bytes
+            language: Language (javascript or typescript)
+            file_path: Path to the file being parsed
+        """
+        # Always initialize parsers (they may be needed for cross-file imports)
+        # even if current file doesn't directly import the validation library
+        if not self.joi_parser:
+            self.joi_parser = JoiParser(self.parser)
+        if not self.zod_parser:
+            self.zod_parser = ZodParser(self.parser)
+        if not self.json_schema_parser:
+            self.json_schema_parser = JSONSchemaParser(self.parser)
+
+        # Extract schemas if this file has direct imports
+        has_joi = self._has_import(tree, source_code, language, ["joi", "celebrate"])
+        if has_joi:
+            joi_schemas = self.joi_parser.extract_schemas_from_file(
+                tree, source_code, language, file_path
+            )
+            self.validation_schemas.update(joi_schemas)
+
+        # Check for Zod imports
+        has_zod = self._has_import(tree, source_code, language, ["zod"])
+        if has_zod:
+            zod_schemas = self.zod_parser.extract_schemas_from_file(
+                tree, source_code, language, file_path
+            )
+            self.validation_schemas.update(zod_schemas)
+
+        # Check for JSON Schema / ajv imports
+        has_json_schema = self._has_import(
+            tree, source_code, language, ["ajv", "express-json-validator-middleware"]
+        )
+        if has_json_schema:
+            json_schemas = self.json_schema_parser.extract_schemas_from_file(
+                tree, source_code, language, file_path
+            )
+            self.validation_schemas.update(json_schemas)
+
+        # Also load cross-file imports for all parsers (e.g., route files importing validation files)
+        joi_schemas = self.joi_parser.extract_schemas_from_file(
+            tree, source_code, language, file_path
+        )
+        self.validation_schemas.update(joi_schemas)
+
+        zod_schemas = self.zod_parser.extract_schemas_from_file(
+            tree, source_code, language, file_path
+        )
+        self.validation_schemas.update(zod_schemas)
+
+        json_schemas = self.json_schema_parser.extract_schemas_from_file(
+            tree, source_code, language, file_path
+        )
+        self.validation_schemas.update(json_schemas)
+
+    def _has_import(
+        self, tree, source_code: bytes, language: str, package_names: List[str]
+    ) -> bool:
+        """
+        Check if file imports any of the given packages.
+
+        Args:
+            tree: Tree-sitter syntax tree
+            source_code: Source code bytes
+            language: Language (javascript or typescript)
+            package_names: List of package names to check
+
+        Returns:
+            True if any package is imported
+        """
+        # Query for import statements
+        import_query = """
+        (import_statement
+          source: (string) @import_source)
+        """
+
+        # Query for require statements
+        require_query = """
+        (call_expression
+          function: (identifier) @func_name
+          arguments: (arguments
+            (string) @require_source))
+        """
+
+        # Check imports
+        import_matches = self.parser.query(tree, import_query, language)
+        for match in import_matches:
+            import_source_node = match.get("import_source")
+            if import_source_node:
+                import_text = self.parser.extract_string_value(
+                    import_source_node, source_code
+                )
+                if any(pkg in import_text for pkg in package_names):
+                    return True
+
+        # Check requires
+        require_matches = self.parser.query(tree, require_query, language)
+        for match in require_matches:
+            func_name_node = match.get("func_name")
+            require_source_node = match.get("require_source")
+
+            if func_name_node and require_source_node:
+                func_name = self.parser.get_node_text(func_name_node, source_code)
+                if func_name == "require":
+                    require_text = self.parser.extract_string_value(
+                        require_source_node, source_code
+                    )
+                    if any(pkg in require_text for pkg in package_names):
+                        return True
+
+        return False
+
+    def _extract_validation_from_middleware(
+        self, arg_nodes: List[Node], source_code: bytes
+    ) -> Dict[str, Any]:
+        """
+        Extract validation schemas from middleware in route arguments.
+
+        Args:
+            arg_nodes: List of argument nodes (path, middleware..., handler)
+            source_code: Source code bytes
+
+        Returns:
+            Metadata dictionary with validation schemas
+        """
+        metadata = {}
+
+        # Skip first argument (path) and last argument (handler)
+        # Check middle arguments for validation middleware
+        middleware_nodes = arg_nodes[1:-1] if len(arg_nodes) > 2 else []
+
+        for middleware_node in middleware_nodes:
+            if middleware_node.type != "call_expression":
+                continue
+
+            # Try all parsers and collect results
+            parser_results = []
+
+            if self.joi_parser:
+                joi_result = self.joi_parser.detect_middleware_pattern(
+                    middleware_node, source_code
+                )
+                if joi_result:
+                    parser_results.append(joi_result)
+
+            if self.zod_parser:
+                zod_result = self.zod_parser.detect_middleware_pattern(
+                    middleware_node, source_code
+                )
+                if zod_result:
+                    parser_results.append(zod_result)
+
+            if self.json_schema_parser:
+                json_schema_result = self.json_schema_parser.detect_middleware_pattern(
+                    middleware_node, source_code
+                )
+                if json_schema_result:
+                    parser_results.append(json_schema_result)
+
+            # Use the first result that has either:
+            # 1. An inline schema (has 'schema' key)
+            # 2. A schema_ref that exists in validation_schemas AND matches parser type
+            # 3. A celebrate/config pattern (has 'celebrate' or 'config' key)
+            for result in parser_results:
+                # Handle celebrate/config patterns (multiple locations)
+                if result.get("celebrate") or result.get("config"):
+                    # These have nested schemas - let _process_validation_result handle validation
+                    metadata.update(self._process_validation_result(result))
+                    break
+
+                # Handle inline schema
+                elif "schema" in result:
+                    metadata.update(self._process_validation_result(result))
+                    break
+
+                # Handle schema reference
+                elif "schema_ref" in result:
+                    schema_ref = result["schema_ref"]
+                    if schema_ref in self.validation_schemas:
+                        # Check if parser type matches
+                        validation_schema = self.validation_schemas[schema_ref]
+                        result_parser_type = result.get("type")  # "joi", "zod", "json_schema"
+
+                        # Match if parser_type matches or if schema doesn't have a parser_type
+                        if validation_schema.parser_type == result_parser_type or not validation_schema.parser_type:
+                            metadata.update(self._process_validation_result(result))
+                            break
+
+        return metadata
+
+    def _process_validation_result(
+        self, validation_result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process validation middleware result and convert to route metadata.
+
+        Args:
+            validation_result: Result from validation parser
+
+        Returns:
+            Metadata dictionary for route
+        """
+        metadata = {}
+
+        # Handle celebrate/config pattern (multiple locations)
+        if validation_result.get("celebrate") or validation_result.get("config"):
+            schemas = validation_result.get("schemas", {})
+            for location, schema_info in schemas.items():
+                if "schema_ref" in schema_info:
+                    # Look up schema by reference
+                    schema_ref = schema_info["schema_ref"]
+                    if schema_ref in self.validation_schemas:
+                        validation_schema = self.validation_schemas[schema_ref]
+                        if location == "body":
+                            metadata["request_body"] = validation_schema.schema
+                        elif location == "query":
+                            # Convert schema properties to query parameters
+                            query_params = self._schema_to_query_params(
+                                validation_schema.schema
+                            )
+                            metadata["query_params"] = query_params
+                elif "schema" in schema_info:
+                    # Inline schema
+                    schema = schema_info["schema"]
+                    if location == "body":
+                        metadata["request_body"] = schema
+                    elif location == "query":
+                        query_params = self._schema_to_query_params(schema)
+                        metadata["query_params"] = query_params
+        else:
+            # Single location validation
+            location = validation_result.get("location", "body")
+
+            if "schema_ref" in validation_result:
+                # Look up schema by reference
+                schema_ref = validation_result["schema_ref"]
+                if schema_ref in self.validation_schemas:
+                    validation_schema = self.validation_schemas[schema_ref]
+                    if location == "body":
+                        metadata["request_body"] = validation_schema.schema
+                    elif location == "query":
+                        query_params = self._schema_to_query_params(
+                            validation_schema.schema
+                        )
+                        metadata["query_params"] = query_params
+            elif "schema" in validation_result:
+                # Inline schema
+                schema = validation_result["schema"]
+                if location == "body":
+                    metadata["request_body"] = schema
+                elif location == "query":
+                    query_params = self._schema_to_query_params(schema)
+                    metadata["query_params"] = query_params
+
+        return metadata
+
+    def _schema_to_query_params(self, schema: Schema) -> List[Parameter]:
+        """
+        Convert schema to query parameters.
+
+        Args:
+            schema: OpenAPI schema
+
+        Returns:
+            List of Parameter objects
+        """
+        if not schema or schema.type != "object" or not schema.properties:
+            return []
+
+        params = []
+        required_fields = schema.required or []
+
+        for prop_name, prop_schema in schema.properties.items():
+            # Extract type from nested dict if needed
+            if isinstance(prop_schema, dict):
+                param_type = prop_schema.get("type", "string")
+            else:
+                param_type = getattr(prop_schema, "type", "string")
+
+            param = Parameter(
+                name=prop_name,
+                location=ParameterLocation.QUERY,
+                type=param_type,
+                required=prop_name in required_fields,
+            )
+            params.append(param)
+
+        return params
