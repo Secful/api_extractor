@@ -364,13 +364,37 @@ class FrameworkDetector:
         frameworks: Set[FrameworkType] = set()
 
         # Check for Next.js API routes structure
-        # App Router: app/api/ directory
-        if os.path.exists(os.path.join(path, "app", "api")):
-            frameworks.add(FrameworkType.NEXTJS)
+        # Only add Next.js if we have confirming evidence (package.json or next.config.js)
+        has_nextjs_config = (
+            os.path.exists(os.path.join(path, "next.config.js"))
+            or os.path.exists(os.path.join(path, "next.config.mjs"))
+            or os.path.exists(os.path.join(path, "next.config.ts"))
+        )
 
-        # Pages Router: pages/api/ directory
-        if os.path.exists(os.path.join(path, "pages", "api")):
-            frameworks.add(FrameworkType.NEXTJS)
+        # Also check package.json for "next" dependency
+        pkg_file = os.path.join(path, "package.json")
+        has_next_in_package = False
+        if os.path.exists(pkg_file):
+            try:
+                with open(pkg_file, "r", encoding="utf-8") as f:
+                    pkg = json.load(f)
+                    deps = {
+                        **pkg.get("dependencies", {}),
+                        **pkg.get("devDependencies", {}),
+                    }
+                    has_next_in_package = "next" in deps
+            except Exception:
+                pass
+
+        # Only detect Next.js if we have config file OR package.json with "next"
+        if has_nextjs_config or has_next_in_package:
+            # App Router: app/api/ directory
+            if os.path.exists(os.path.join(path, "app", "api")):
+                frameworks.add(FrameworkType.NEXTJS)
+
+            # Pages Router: pages/api/ directory
+            if os.path.exists(os.path.join(path, "pages", "api")):
+                frameworks.add(FrameworkType.NEXTJS)
 
         return frameworks
 

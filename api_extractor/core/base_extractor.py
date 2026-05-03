@@ -141,7 +141,7 @@ class BaseExtractor(ABC):
         Find all source files in the given path.
 
         Args:
-            path: Path to search
+            path: Path to search (can be a file or directory)
 
         Returns:
             List of file paths
@@ -149,6 +149,13 @@ class BaseExtractor(ABC):
         extensions = self.get_file_extensions()
         files = []
 
+        # Handle single file
+        if os.path.isfile(path):
+            if any(path.endswith(ext) for ext in extensions):
+                return [path]
+            return []
+
+        # Handle directory
         for root, _, filenames in os.walk(path):
             # Skip common ignore directories
             if any(

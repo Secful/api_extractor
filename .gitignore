@@ -89,3 +89,8 @@ tests/fixtures/real-world/python/django/netbox/
 tests/fixtures/real-world/python/django/wger/
 tests/fixtures/real-world/python/fastapi/polar/
 tests/fixtures/real-world/python/flask/flask-realworld-example-app/
+
+# Lambda deployment artifacts
+build/
+response.json
+lambda-function.zip

@@ -133,6 +133,9 @@ class GinExtractor(BaseExtractor):
         if not tree:
             return routes
 
+        # Store current tree for helper methods
+        self._current_tree = tree
+
         # Reset router groups for this file
         self.router_groups = {}
 
@@ -292,11 +295,48 @@ class GinExtractor(BaseExtractor):
                             pass
 
             else:
-                # Same-file handler or anonymous
+                # Same-file handler - check package registry too
                 if handler_info["name"] != "<anonymous>":
-                    handler_schemas = self._extract_handler_schemas(
-                        handler_info["name"], tree, source_code, struct_schemas
-                    )
+                    handler_name = handler_info["name"]
+
+                    # Try package registry first (for cross-file types in same package)
+                    try:
+                        from pathlib import Path
+                        file_abs = Path(file_path).resolve()
+                        base_abs = Path(self.base_path).resolve()
+                        package_rel_path = str(file_abs.parent.relative_to(base_abs))
+
+                        # Look up handler in registry
+                        if package_rel_path in self.handler_registry:
+                            handler_data = self.handler_registry[package_rel_path].get(handler_name)
+
+                            if handler_data:
+                                # Resolve schemas from package registry
+                                if handler_data.get("request_type"):
+                                    request_schema = self._resolve_type_in_package(
+                                        handler_data["request_type"],
+                                        package_rel_path
+                                    )
+                                    if request_schema:
+                                        handler_schemas["request_body"] = request_schema
+
+                                if handler_data.get("response_type"):
+                                    response_schema = self._resolve_type_in_package(
+                                        handler_data["response_type"],
+                                        package_rel_path
+                                    )
+                                    if response_schema:
+                                        handler_schemas["response_schema"] = response_schema
+                    except (ValueError, AttributeError):
+                        pass
+
+                    # Fallback: Same-file extraction (for inline types)
+                    if not handler_schemas:
+                        self._current_file_structs = struct_schemas
+                        handler_schemas = self._extract_handler_schemas(
+                            handler_name, tree, source_code, struct_schemas
+                        )
+                        self._current_file_structs = {}
 
             # Create route
             route = Route(
@@ -528,6 +568,8 @@ class GinExtractor(BaseExtractor):
         """
         Parse struct fields with Go tags.
 
+        Enhancement: Handle inline struct types for nested field extraction.
+
         Args:
             struct_node: Struct type node
             source_code: Source code bytes
@@ -556,9 +598,15 @@ class GinExtractor(BaseExtractor):
             field_info = self._parse_struct_field(field, source_code)
             if field_info:
                 field_name = field_info["name"]
-                properties[field_name] = {
-                    "type": field_info["type"]
-                }
+
+                # Check if this field has an inline struct definition
+                if field_info.get("inline_struct_schema"):
+                    # Store the full inline struct schema
+                    properties[field_name] = field_info["inline_struct_schema"].model_dump(exclude_none=True)
+                else:
+                    properties[field_name] = {
+                        "type": field_info["type"]
+                    }
 
                 if field_info.get("required", False):
                     required.append(field_name)
@@ -580,15 +628,20 @@ class GinExtractor(BaseExtractor):
         """
         Parse a single struct field with Go tags.
 
+        Enhancement: Store actual type name for nested type resolution and extract inline struct schemas.
+
         Args:
             field_node: Field declaration node
             source_code: Source code bytes
 
         Returns:
-            Dict with name, type, and required, or None
+            Dict with name, type, type_name, inline_struct_schema, and required, or None
         """
         field_name = None
         field_type = "string"
+        field_type_name = None  # Store actual type name
+        inline_struct_schema = None  # Store inline struct schema
+        inline_struct_node = None  # Store struct node for later parsing
         is_required = False
         json_name = None
 
@@ -596,9 +649,16 @@ class GinExtractor(BaseExtractor):
         for child in field_node.children:
             if child.type == "field_identifier":
                 field_name = self.parser.get_node_text(child, source_code)
-            elif child.type in ("type_identifier", "pointer_type", "slice_type", "map_type", "qualified_type"):
+            elif child.type in ("type_identifier", "pointer_type", "slice_type", "map_type", "qualified_type", "struct_type"):
                 type_text = self.parser.get_node_text(child, source_code)
                 field_type = self._parse_go_type(type_text)
+                # Store the actual type name for nested resolution
+                if child.type == "type_identifier":
+                    field_type_name = type_text
+                elif child.type == "struct_type":
+                    # Inline struct definition - parse it
+                    field_type_name = None
+                    inline_struct_node = child
             elif child.type == "raw_string_literal":
                 # Parse Go tags
                 tag_text = self.parser.get_node_text(child, source_code)
@@ -618,14 +678,24 @@ class GinExtractor(BaseExtractor):
         if not field_name:
             return None
 
+        # Parse inline struct if present
+        if inline_struct_node:
+            inline_struct_schema = self._parse_struct_fields(inline_struct_node, source_code)
+
         # Use json tag name if specified, otherwise use field name
         name = json_name if json_name else field_name
 
-        return {
+        result = {
             "name": name,
             "type": field_type,
+            "type_name": field_type_name,  # For named type resolution
             "required": is_required
         }
+
+        if inline_struct_schema:
+            result["inline_struct_schema"] = inline_struct_schema
+
+        return result
 
     def _parse_go_tag(self, tag_text: str) -> Dict[str, Any]:
         """
@@ -773,10 +843,13 @@ class GinExtractor(BaseExtractor):
 
     def _find_bind_call(self, body_node: Node, source_code: bytes) -> Optional[str]:
         """
-        Find BindJSON/ShouldBindJSON call and extract type.
+        Find request binding and extract type.
 
-        Looks for: var req RequestType; c.BindJSON(&req)
-        Or: c.ShouldBindJSON(&RequestType{})
+        Supports:
+        1. Direct: var req Type; c.BindJSON(&req)
+        2. Direct composite: c.ShouldBindJSON(&TypeName{})
+        3. Indirect: validator := NewValidator(); validator.Bind(c)
+        4. Nested: Extract validator.User field from validator struct
 
         Args:
             body_node: Function body node
@@ -785,6 +858,11 @@ class GinExtractor(BaseExtractor):
         Returns:
             Type name or None
         """
+        from api_extractor.extractors.schema_utils import (
+            extract_nested_field_from_struct,
+            find_type_in_variable_chain
+        )
+
         body_text = self.parser.get_node_text(body_node, source_code)
 
         # Pattern 1: c.BindJSON(&variable) or c.ShouldBindJSON(&variable)
@@ -803,13 +881,53 @@ class GinExtractor(BaseExtractor):
         if composite_match:
             return composite_match.group(1)
 
+        # Pattern 3: Indirect - validator.Bind(c)
+        # Find: variable.Bind(c) where variable has a custom type
+        indirect_match = re.search(r'(\w+)\.Bind\s*\(\s*c\s*\)', body_text)
+        if indirect_match:
+            validator_var = indirect_match.group(1)
+
+            # Find validator type from variable declaration
+            validator_type = find_type_in_variable_chain(
+                validator_var, body_node, source_code, "go", self.parser
+            )
+
+            if validator_type:
+                # Look up validator struct in all_structs (same-file structs)
+                # First, check current file structs
+                current_file_structs = getattr(self, '_current_file_structs', {})
+
+                if validator_type in current_file_structs:
+                    validator_schema = current_file_structs[validator_type]
+
+                    # Pattern 3a: Check for nested struct field (common pattern)
+                    # type UserValidator struct { User struct {...} `json:"user"` }
+                    # Common convention: nested field named after entity
+                    # Try common field names (both capitalized and lowercase for JSON names)
+                    for field_name in ['User', 'user', 'Data', 'data', 'Model', 'model', 'Request', 'request']:
+                        nested_schema = extract_nested_field_from_struct(
+                            validator_schema,
+                            field_path=field_name
+                        )
+                        if nested_schema:
+                            # Return a marker indicating nested type
+                            return f"{validator_type}.{field_name}"
+
+                # Pattern 3b: Validator itself is the request type
+                # Return type name even if not in current file - will be resolved later via package registry
+                return validator_type
+
         return None
 
     def _find_json_call(self, body_node: Node, source_code: bytes) -> Optional[str]:
         """
-        Find c.JSON call and extract response type.
+        Find JSON response and extract type.
 
-        Looks for: c.JSON(200, response) or c.JSON(http.StatusOK, TypeName{})
+        Supports:
+        1. Direct: c.JSON(200, UserResponse{})
+        2. Variable: response := UserResponse{}; c.JSON(200, response)
+        3. Serializer: serializer.Response() → trace return type
+        4. Wrapped: gin.H{"user": serializer.Response()} → extract inner type
 
         Args:
             body_node: Function body node
@@ -818,6 +936,8 @@ class GinExtractor(BaseExtractor):
         Returns:
             Type name or None
         """
+        from api_extractor.extractors.schema_utils import find_type_in_variable_chain
+
         body_text = self.parser.get_node_text(body_node, source_code)
 
         # Pattern 1: c.JSON(status, TypeName{...}) or c.JSON(status, []TypeName{...})
@@ -829,7 +949,49 @@ class GinExtractor(BaseExtractor):
             if '.' not in type_name:
                 return type_name
 
-        # Pattern 2: c.JSON(status, variable) - try to find variable type
+        # Pattern 2: gin.H wrapper with serializer - gin.H{"user": serializer.Response()}
+        # Find all c.JSON calls with gin.H
+        gin_h_matches = re.finditer(
+            r'\.JSON\s*\(\s*[\w.]+\s*,\s*gin\.H\s*\{[^}]*"(\w+)":\s*(\w+)\.(\w+)\(\)',
+            body_text
+        )
+
+        for match in gin_h_matches:
+            json_key = match.group(1)  # e.g., "user"
+            serializer_var = match.group(2)  # e.g., "serializer"
+            method_name = match.group(3)  # e.g., "Response"
+
+            # Find serializer type
+            serializer_type = find_type_in_variable_chain(
+                serializer_var, body_node, source_code, "go", self.parser
+            )
+
+            if serializer_type:
+                # Trace Response() method to find return type
+                return_type = self._trace_serializer_method(
+                    serializer_type, method_name, source_code
+                )
+                if return_type:
+                    return return_type
+
+        # Pattern 3: Direct serializer - c.JSON(status, serializer.Response())
+        serializer_match = re.search(r'\.JSON\s*\(\s*[\w.]+\s*,\s*(\w+)\.(\w+)\(\)', body_text)
+        if serializer_match:
+            serializer_var = serializer_match.group(1)
+            method_name = serializer_match.group(2)
+
+            serializer_type = find_type_in_variable_chain(
+                serializer_var, body_node, source_code, "go", self.parser
+            )
+
+            if serializer_type:
+                return_type = self._trace_serializer_method(
+                    serializer_type, method_name, source_code
+                )
+                if return_type:
+                    return return_type
+
+        # Pattern 4: c.JSON(status, variable) - try to find variable type
         # Status can be a number or constant like http.StatusOK
         # Match all c.JSON calls and find the last one (usually the success response)
         var_matches = list(re.finditer(r'\.JSON\s*\(\s*[\w.]+\s*,\s*([\w.]+)\s*\)', body_text))
@@ -858,6 +1020,57 @@ class GinExtractor(BaseExtractor):
             var_decl_match = re.search(var_decl_pattern, body_text)
             if var_decl_match:
                 return var_decl_match.group(1)
+
+        return None
+
+    def _trace_serializer_method(
+        self,
+        serializer_type: str,
+        method_name: str,
+        source_code: bytes
+    ) -> Optional[str]:
+        """
+        Find serializer method and extract its return type.
+
+        Note: Since serializers are often in separate files, we use a naming convention:
+        - UserSerializer.Response() → UserResponse
+        - ProfileSerializer.Response() → ProfileResponse
+
+        Args:
+            serializer_type: Serializer type name (e.g., "UserSerializer")
+            method_name: Method name to find (e.g., "Response")
+            source_code: Source code bytes
+
+        Returns:
+            Return type name or None if not found
+
+        Examples:
+            serializer_type = "UserSerializer"
+            method_name = "Response"
+
+            Returns: "UserResponse" (by convention)
+        """
+        # Common naming pattern: XSerializer.Response() → XResponse
+        if serializer_type.endswith("Serializer") and method_name == "Response":
+            # Extract base name: "UserSerializer" → "User"
+            base_name = serializer_type[:-10]  # Remove "Serializer"
+            response_type = f"{base_name}Response"
+            return response_type
+
+        # Fallback: Try to find in current tree (same-file method)
+        from api_extractor.extractors.schema_utils import trace_method_return_type
+
+        current_tree = getattr(self, '_current_tree', None)
+        if current_tree:
+            return_type = trace_method_return_type(
+                method_name=method_name,
+                source_tree=current_tree,
+                source_code=source_code,
+                language="go",
+                parser=self.parser
+            )
+            if return_type:
+                return return_type
 
         return None
 
@@ -1160,6 +1373,31 @@ class GinExtractor(BaseExtractor):
         if not tree:
             return
 
+        # Store current tree for helper methods
+        self._current_tree = tree
+
+        # Find struct definitions in this file for _find_bind_call to use
+        struct_schemas = self._find_struct_definitions(tree, source_code)
+
+        # Also load structs from the same package (already registered)
+        # This allows _find_bind_call to resolve validators from other files in the package
+        try:
+            file_abs = Path(file_path).resolve()
+            base_abs = Path(self.base_path).resolve()
+            package_dir = file_abs.parent.relative_to(base_abs)
+            package_key = str(package_dir)
+
+            # Merge same-file structs with package structs
+            all_package_structs = {}
+            if package_key in self.package_registry:
+                all_package_structs.update(self.package_registry[package_key])
+            all_package_structs.update(struct_schemas)  # Override with same-file structs
+
+            self._current_file_structs = all_package_structs
+        except (ValueError, AttributeError):
+            # Fallback to just same-file structs
+            self._current_file_structs = struct_schemas
+
         # Find all functions
         func_query = """
         (function_declaration
@@ -1201,6 +1439,9 @@ class GinExtractor(BaseExtractor):
                 "response_type": response_type,
             }
 
+        # Clear temp state
+        self._current_file_structs = {}
+
         if not handlers:
             return
 
@@ -1226,14 +1467,19 @@ class GinExtractor(BaseExtractor):
         """
         Resolve a type name to a Schema by looking in the package registry.
 
+        Supports:
+        - Simple types: "User"
+        - Array types: "[]User"
+        - Nested fields: "UserValidator.user" (extracts nested field from parent struct)
+
         Args:
-            type_name: Type name like "User" or "[]User"
+            type_name: Type name like "User", "[]User", or "UserValidator.user"
             package_path: Package path relative to base_path
 
         Returns:
             Schema object or None if not found
         """
-        from api_extractor.extractors.schema_utils import wrap_array_schema
+        from api_extractor.extractors.schema_utils import wrap_array_schema, extract_nested_field_from_struct
 
         # Handle slices: []User
         if type_name.startswith("[]"):
@@ -1241,6 +1487,27 @@ class GinExtractor(BaseExtractor):
             inner_schema = self._resolve_type_in_package(inner_type, package_path)
             if inner_schema:
                 return wrap_array_schema(inner_schema)
+            return None
+
+        # Handle nested fields: Type.field
+        if '.' in type_name:
+            parts = type_name.split('.', 1)  # Split into parent type and field path
+            parent_type = parts[0]
+            field_path = parts[1]
+
+            # Look up parent type in registry
+            if package_path in self.package_registry:
+                structs = self.package_registry[package_path]
+                if parent_type in structs:
+                    parent_schema = structs[parent_type]
+                    # Extract nested field
+                    nested_schema = extract_nested_field_from_struct(
+                        parent_schema,
+                        field_path=field_path
+                    )
+                    if nested_schema:
+                        return nested_schema
+
             return None
 
         # Look up in package registry

@@ -26,8 +26,14 @@ class FlaskExtractor(BaseExtractor):
     def __init__(self) -> None:
         """Initialize Flask extractor."""
         super().__init__(FrameworkType.FLASK)
-        self.blueprints: Dict[str, str] = {}  # blueprint_var -> url_prefix
-        self.namespaces: Dict[str, str] = {}  # namespace_var -> url_prefix (Flask-RESTX)
+        self.blueprints: Dict[
+            str, Dict[str, str]
+        ] = {}  # blueprint_var -> {"url_prefix": str, "type": str}
+        self.namespaces: Dict[
+            str, str
+        ] = {}  # namespace_var -> url_prefix (Flask-RESTX)
+        self.smorest_imports: Set[str] = set()  # Track flask_smorest imports
+        self.marshmallow_schemas: Dict[str, Schema] = {}  # Store schemas for resolution
 
     def get_file_extensions(self) -> List[str]:
         """Get Python file extensions."""
@@ -44,6 +50,10 @@ class FlaskExtractor(BaseExtractor):
             List of Route objects
         """
         routes = []
+
+        # Clear cached data for this file
+        self.marshmallow_schemas = {}
+        self.smorest_imports = set()
 
         # Read file content
         source_code = self._read_file(file_path)
@@ -68,6 +78,9 @@ class FlaskExtractor(BaseExtractor):
         imported_schemas = self._resolve_imported_schemas(imports, file_path)
         marshmallow_schemas.update(imported_schemas)
 
+        # Store schemas for later resolution in _route_to_endpoints()
+        self.marshmallow_schemas = marshmallow_schemas
+
         # First pass: Find Blueprint and Namespace definitions using query
         self._extract_blueprints_query(tree, source_code)
         self._extract_namespaces_query(tree, source_code)
@@ -76,7 +89,11 @@ class FlaskExtractor(BaseExtractor):
         restx_routes = self._extract_restx_resources(tree, source_code, file_path)
         routes.extend(restx_routes)
 
-        # Third pass: Find route decorators using query
+        # Third pass: Find flask-smorest MethodView routes
+        smorest_routes = self._extract_smorest_routes(tree, source_code, file_path)
+        routes.extend(smorest_routes)
+
+        # Fourth pass: Find route decorators using query
         # Query for @app.route() or @blueprint.route() or @app.get/post/etc
         route_query = """
         (decorated_definition
@@ -121,14 +138,19 @@ class FlaskExtractor(BaseExtractor):
 
                 # Add blueprint prefix if applicable
                 if obj_name in self.blueprints:
-                    prefix = self.blueprints[obj_name]
+                    prefix = self.blueprints[obj_name]["url_prefix"]
                     path = prefix + path
 
                 location = self.parser.get_node_location(func_name_node)
 
                 # Extract all decorators (for schema information)
                 func_def_node = func_name_node.parent if func_name_node.parent else None
-                decorated_def_node = func_def_node.parent if func_def_node and func_def_node.parent.type == "decorated_definition" else None
+                decorated_def_node = (
+                    func_def_node.parent
+                    if func_def_node
+                    and func_def_node.parent.type == "decorated_definition"
+                    else None
+                )
 
                 # Extract schema decorators (@marshal_with, @use_kwargs)
                 schema_metadata = {}
@@ -138,9 +160,13 @@ class FlaskExtractor(BaseExtractor):
                     )
 
                 # Extract function parameters for schemas
-                metadata = self._extract_function_metadata(
-                    func_def_node, source_code, pydantic_models
-                ) if func_def_node else {}
+                metadata = (
+                    self._extract_function_metadata(
+                        func_def_node, source_code, pydantic_models
+                    )
+                    if func_def_node
+                    else {}
+                )
 
                 # Merge schema metadata
                 metadata.update(schema_metadata)
@@ -170,14 +196,19 @@ class FlaskExtractor(BaseExtractor):
 
                 # Add blueprint prefix if applicable
                 if obj_name in self.blueprints:
-                    prefix = self.blueprints[obj_name]
+                    prefix = self.blueprints[obj_name]["url_prefix"]
                     path = prefix + path
 
                 location = self.parser.get_node_location(func_name_node)
 
                 # Extract all decorators (for schema information)
                 func_def_node = func_name_node.parent if func_name_node.parent else None
-                decorated_def_node = func_def_node.parent if func_def_node and func_def_node.parent.type == "decorated_definition" else None
+                decorated_def_node = (
+                    func_def_node.parent
+                    if func_def_node
+                    and func_def_node.parent.type == "decorated_definition"
+                    else None
+                )
 
                 # Extract schema decorators (@marshal_with, @use_kwargs)
                 schema_metadata = {}
@@ -187,9 +218,13 @@ class FlaskExtractor(BaseExtractor):
                     )
 
                 # Extract function parameters for schemas
-                metadata = self._extract_function_metadata(
-                    func_def_node, source_code, pydantic_models
-                ) if func_def_node else {}
+                metadata = (
+                    self._extract_function_metadata(
+                        func_def_node, source_code, pydantic_models
+                    )
+                    if func_def_node
+                    else {}
+                )
 
                 # Merge schema metadata
                 metadata.update(schema_metadata)
@@ -247,7 +282,15 @@ class FlaskExtractor(BaseExtractor):
             if args_node:
                 url_prefix = self._extract_url_prefix(args_node, source_code)
 
-            self.blueprints[var_name] = url_prefix or ""
+            # Determine blueprint type based on imports
+            blueprint_type = (
+                "smorest" if "Blueprint" in self.smorest_imports else "standard"
+            )
+
+            self.blueprints[var_name] = {
+                "url_prefix": url_prefix or "",
+                "type": blueprint_type,
+            }
 
     def _extract_namespaces_query(self, tree, source_code: bytes) -> None:
         """
@@ -272,7 +315,6 @@ class FlaskExtractor(BaseExtractor):
         for match in namespace_matches:
             var_name_node = match.get("var_name")
             func_name_node = match.get("func_name")
-            args_node = match.get("args")
 
             if not var_name_node or not func_name_node:
                 continue
@@ -288,7 +330,9 @@ class FlaskExtractor(BaseExtractor):
             # The actual route paths (from @namespace.route()) will define the full path.
             self.namespaces[var_name] = ""
 
-    def _extract_namespace_name(self, args_node: Node, source_code: bytes) -> Optional[str]:
+    def _extract_namespace_name(
+        self, args_node: Node, source_code: bytes
+    ) -> Optional[str]:
         """
         Extract namespace name from Namespace arguments.
 
@@ -305,7 +349,365 @@ class FlaskExtractor(BaseExtractor):
                 return self.parser.extract_string_value(child, source_code)
         return None
 
-    def _extract_restx_resources(self, tree, source_code: bytes, file_path: str) -> List[Route]:
+    def _extract_smorest_routes(
+        self, tree, source_code: bytes, file_path: str
+    ) -> List[Route]:
+        """
+        Extract flask-smorest MethodView routes with @blp.route() decorator.
+
+        Args:
+            tree: Syntax tree
+            source_code: Source code bytes
+            file_path: Path to current file
+
+        Returns:
+            List of Route objects
+        """
+        routes = []
+
+        # Query for decorated class definitions
+        smorest_query = """
+        (decorated_definition
+          (decorator
+            (call
+              function: (attribute
+                object: (identifier) @blp_var
+                attribute: (identifier) @decorator_name)
+              arguments: (argument_list) @args))
+          definition: (class_definition
+            name: (identifier) @class_name
+            superclasses: (argument_list) @superclasses
+            body: (block) @class_body))
+        """
+
+        smorest_matches = self.parser.query(tree, smorest_query, "python")
+
+        for match in smorest_matches:
+            blp_var_node = match.get("blp_var")
+            decorator_name_node = match.get("decorator_name")
+            args_node = match.get("args")
+            class_name_node = match.get("class_name")
+            superclasses_node = match.get("superclasses")
+            class_body_node = match.get("class_body")
+
+            if not all(
+                [
+                    blp_var_node,
+                    decorator_name_node,
+                    class_name_node,
+                    superclasses_node,
+                    class_body_node,
+                ]
+            ):
+                continue
+
+            blp_var = self.parser.get_node_text(blp_var_node, source_code)
+            decorator_name = self.parser.get_node_text(decorator_name_node, source_code)
+
+            # Check if it's a route decorator
+            if decorator_name != "route":
+                continue
+
+            # Check if blp_var is a known smorest blueprint
+            if blp_var not in self.blueprints:
+                continue
+
+            if self.blueprints[blp_var]["type"] != "smorest":
+                continue
+
+            # Check if MethodView is in superclasses
+            superclasses_text = self.parser.get_node_text(
+                superclasses_node, source_code
+            )
+            if "MethodView" not in superclasses_text:
+                continue
+
+            # Extract path from decorator arguments
+            path = self._extract_path_from_arguments(args_node, source_code)
+            if not path:
+                continue
+
+            # Ensure path has leading slash
+            if not path.startswith("/"):
+                path = "/" + path
+
+            # Get blueprint prefix
+            blueprint_prefix = self.blueprints[blp_var]["url_prefix"]
+
+            # Combine prefix and path
+            if blueprint_prefix:
+                blueprint_prefix = blueprint_prefix.rstrip("/")
+                full_path = blueprint_prefix + path
+            else:
+                full_path = path
+
+            class_name = self.parser.get_node_text(class_name_node, source_code)
+            location = self.parser.get_node_location(class_name_node)
+
+            # Extract HTTP methods from MethodView class body
+            http_methods = self._extract_resource_methods(class_body_node, source_code)
+
+            if not http_methods:
+                continue
+
+            # Extract method decorators for each HTTP method
+            method_decorators = self._extract_smorest_method_decorators(
+                class_body_node, source_code, http_methods
+            )
+
+            # Create a route for each HTTP method
+            for http_method in http_methods:
+                metadata = {
+                    "smorest": True,
+                    "class_name": class_name,
+                }
+
+                # Add method-specific decorators if present
+                if http_method.value.lower() in method_decorators:
+                    metadata.update(method_decorators[http_method.value.lower()])
+
+                route = Route(
+                    path=full_path,
+                    methods=[http_method],
+                    handler_name=f"{class_name}.{http_method.value.lower()}",
+                    framework=self.framework,
+                    raw_path=full_path,
+                    source_file=file_path,
+                    source_line=location["start_line"],
+                    metadata=metadata,
+                )
+                routes.append(route)
+
+        return routes
+
+    def _extract_smorest_method_decorators(
+        self, class_body_node: Node, source_code: bytes, http_methods: List[HTTPMethod]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Extract method-level decorators from flask-smorest MethodView HTTP methods.
+
+        Args:
+            class_body_node: Class body node
+            source_code: Source code bytes
+            http_methods: List of HTTPMethod enums found in the class
+
+        Returns:
+            Dictionary mapping method names to their decorator metadata
+        """
+        method_metadata = {}
+        http_method_names = [m.value.lower() for m in http_methods]
+
+        # Look for method definitions in class body
+        for child in class_body_node.children:
+            func_def_node = None
+            decorated_def_node = None
+
+            if child.type == "function_definition":
+                func_def_node = child
+            elif child.type == "decorated_definition":
+                decorated_def_node = child
+                func_def_node = child.child_by_field_name("definition")
+
+            if func_def_node and func_def_node.type == "function_definition":
+                name_node = func_def_node.child_by_field_name("name")
+                if not name_node:
+                    continue
+
+                method_name = self.parser.get_node_text(name_node, source_code)
+                if method_name not in http_method_names:
+                    continue
+
+                # Extract decorators if this is a decorated method
+                if decorated_def_node:
+                    metadata = self._parse_smorest_decorators(
+                        decorated_def_node, source_code
+                    )
+                    if metadata:
+                        method_metadata[method_name] = metadata
+
+        return method_metadata
+
+    def _parse_smorest_decorators(
+        self, decorated_def_node: Node, source_code: bytes
+    ) -> Dict[str, Any]:
+        """
+        Parse flask-smorest decorators (@blp.arguments, @blp.response).
+
+        Args:
+            decorated_def_node: decorated_definition node
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary with request_schemas and response_schemas
+        """
+        metadata: Dict[str, Any] = {}
+        request_schemas = []
+        response_schemas = {}
+
+        # Find all decorator nodes
+        for child in decorated_def_node.children:
+            if child.type != "decorator":
+                continue
+
+            # Extract decorator call
+            decorator_call = child.children[1] if len(child.children) > 1 else None
+            if not decorator_call or decorator_call.type != "call":
+                continue
+
+            function_node = decorator_call.child_by_field_name("function")
+            if not function_node or function_node.type != "attribute":
+                continue
+
+            # Get decorator name (should be blp.arguments or blp.response)
+            attribute_node = function_node.child_by_field_name("attribute")
+            if not attribute_node:
+                continue
+
+            decorator_name = self.parser.get_node_text(attribute_node, source_code)
+
+            args_node = decorator_call.child_by_field_name("arguments")
+            if not args_node:
+                continue
+
+            # Parse @blp.arguments(SchemaName, location="query")
+            if decorator_name == "arguments":
+                schema_info = self._parse_blp_arguments(args_node, source_code)
+                if schema_info:
+                    request_schemas.append(schema_info)
+
+            # Parse @blp.response(status_code, SchemaName)
+            elif decorator_name == "response":
+                status_code, schema_name, many = self._parse_blp_response(
+                    args_node, source_code
+                )
+                if status_code:
+                    response_schemas[status_code] = {
+                        "schema": schema_name,
+                        "many": many,
+                    }
+
+        if request_schemas:
+            metadata["request_schemas"] = request_schemas
+        if response_schemas:
+            metadata["response_schemas"] = response_schemas
+
+        return metadata
+
+    def _parse_blp_arguments(
+        self, args_node: Node, source_code: bytes
+    ) -> Optional[Dict[str, str]]:
+        """
+        Parse @blp.arguments(SchemaName, location="query") decorator.
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary with schema and location, or None
+        """
+        schema_name = None
+        location = "json"  # Default location
+
+        for child in args_node.children:
+            # First positional argument is the schema
+            if child.type in ("identifier", "attribute") and schema_name is None:
+                schema_name = self.parser.get_node_text(child, source_code)
+
+            # Look for location keyword argument
+            elif child.type == "keyword_argument":
+                name_node = self.parser.find_child_by_field(child, "name")
+                if not name_node:
+                    continue
+
+                name = self.parser.get_node_text(name_node, source_code)
+                if name == "location":
+                    value_node = self.parser.find_child_by_field(child, "value")
+                    if value_node and value_node.type == "string":
+                        location = (
+                            self.parser.extract_string_value(value_node, source_code)
+                            or "json"
+                        )
+
+        if schema_name:
+            return {"schema": schema_name, "location": location}
+
+        return None
+
+    def _parse_blp_response(
+        self, args_node: Node, source_code: bytes
+    ) -> tuple[Optional[str], Optional[str], bool]:
+        """
+        Parse @blp.response(status_code, SchemaName) decorator.
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+
+        Returns:
+            Tuple of (status_code, schema_name, many)
+        """
+        status_code = None
+        schema_name = None
+        many = False
+
+        arg_count = 0
+        for child in args_node.children:
+            # First positional argument is status code
+            if child.type == "integer" and status_code is None:
+                status_code = self.parser.get_node_text(child, source_code)
+                arg_count += 1
+
+            # Second positional argument is schema (could be a call like Schema(many=True))
+            elif arg_count == 1 and child.type == "call":
+                # Schema with arguments, e.g., Schema(many=True)
+                func_node = child.child_by_field_name("function")
+                if func_node:
+                    schema_name = self.parser.get_node_text(func_node, source_code)
+
+                # Check for many=True in arguments
+                call_args = child.child_by_field_name("arguments")
+                if call_args:
+                    many = self._extract_many_parameter(call_args, source_code)
+
+                arg_count += 1
+
+            # Second positional argument is schema (identifier)
+            elif arg_count == 1 and child.type in ("identifier", "attribute"):
+                schema_name = self.parser.get_node_text(child, source_code)
+                arg_count += 1
+
+        return (status_code, schema_name, many)
+
+    def _extract_many_parameter(self, args_node: Node, source_code: bytes) -> bool:
+        """
+        Extract many=True parameter from schema call arguments.
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+
+        Returns:
+            True if many=True is present, False otherwise
+        """
+        for child in args_node.children:
+            if child.type == "keyword_argument":
+                name_node = self.parser.find_child_by_field(child, "name")
+                if not name_node:
+                    continue
+
+                name = self.parser.get_node_text(name_node, source_code)
+                if name == "many":
+                    value_node = self.parser.find_child_by_field(child, "value")
+                    if value_node:
+                        value = self.parser.get_node_text(value_node, source_code)
+                        return value == "True"
+
+        return False
+
+    def _extract_restx_resources(
+        self, tree, source_code: bytes, file_path: str
+    ) -> List[Route]:
         """
         Extract Flask-RESTX Resource classes with @namespace.route() decorators.
 
@@ -342,7 +744,9 @@ class FlaskExtractor(BaseExtractor):
             class_name_node = match.get("class_name")
             class_body_node = match.get("class_body")
 
-            if not all([namespace_var_node, method_name_node, class_name_node, class_body_node]):
+            if not all(
+                [namespace_var_node, method_name_node, class_name_node, class_body_node]
+            ):
                 continue
 
             namespace_var = self.parser.get_node_text(namespace_var_node, source_code)
@@ -403,7 +807,9 @@ class FlaskExtractor(BaseExtractor):
 
         return routes
 
-    def _extract_resource_methods(self, class_body_node: Node, source_code: bytes) -> List[HTTPMethod]:
+    def _extract_resource_methods(
+        self, class_body_node: Node, source_code: bytes
+    ) -> List[HTTPMethod]:
         """
         Extract HTTP methods from Flask-RESTX Resource class body.
 
@@ -465,7 +871,9 @@ class FlaskExtractor(BaseExtractor):
 
         return None
 
-    def _extract_path_from_arguments(self, args_node: Node, source_code: bytes) -> Optional[str]:
+    def _extract_path_from_arguments(
+        self, args_node: Node, source_code: bytes
+    ) -> Optional[str]:
         """
         Extract path string from arguments node.
 
@@ -640,7 +1048,9 @@ class FlaskExtractor(BaseExtractor):
                 continue
 
             # Check if BaseModel is in superclasses
-            superclasses_text = self.parser.get_node_text(superclasses_node, source_code)
+            superclasses_text = self.parser.get_node_text(
+                superclasses_node, source_code
+            )
             if "BaseModel" not in superclasses_text:
                 continue
 
@@ -652,7 +1062,9 @@ class FlaskExtractor(BaseExtractor):
 
         return models
 
-    def _parse_pydantic_class(self, class_body_node: Node, source_code: bytes) -> Schema:
+    def _parse_pydantic_class(
+        self, class_body_node: Node, source_code: bytes
+    ) -> Schema:
         """
         Parse Pydantic model fields from class body.
 
@@ -683,7 +1095,9 @@ class FlaskExtractor(BaseExtractor):
                             is_optional = False
 
                             if type_node:
-                                type_text = self.parser.get_node_text(type_node, source_code)
+                                type_text = self.parser.get_node_text(
+                                    type_node, source_code
+                                )
                                 is_optional = "Optional" in type_text
                                 field_type = self._map_python_type(type_text)
 
@@ -717,7 +1131,10 @@ class FlaskExtractor(BaseExtractor):
             return "string"
 
     def _extract_function_metadata(
-        self, func_def_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema]
+        self,
+        func_def_node: Node,
+        source_code: bytes,
+        pydantic_models: Dict[str, Schema],
     ) -> Dict[str, Any]:
         """
         Extract metadata from function definition.
@@ -793,7 +1210,9 @@ class FlaskExtractor(BaseExtractor):
                         if args:
                             for child in args.children:
                                 if child.type == "string":
-                                    param_name = self.parser.extract_string_value(child, source_code)
+                                    param_name = self.parser.extract_string_value(
+                                        child, source_code
+                                    )
                                     if param_name and param_name not in seen_params:
                                         seen_params.add(param_name)
                                         params.append(
@@ -811,6 +1230,116 @@ class FlaskExtractor(BaseExtractor):
 
         search_args_get(body_node)
         return params
+
+    def _process_smorest_metadata(
+        self, route: Route, parameters: List[Parameter]
+    ) -> tuple[List[Parameter], Optional[Schema], List[Response]]:
+        """
+        Process flask-smorest metadata to extract parameters, request body, and responses.
+
+        Args:
+            route: Route object with smorest metadata
+            parameters: Existing path parameters
+
+        Returns:
+            Tuple of (parameters, request_body, responses)
+        """
+        request_body = None
+        responses = []
+
+        # Process request schemas from @blp.arguments decorators
+        if "request_schemas" in route.metadata:
+            for schema_info in route.metadata["request_schemas"]:
+                schema_name = schema_info.get("schema")
+                location = schema_info.get("location", "json")
+
+                if not schema_name:
+                    continue
+
+                # Resolve schema from marshmallow_schemas if available
+                if schema_name in self.marshmallow_schemas:
+                    schema = self.marshmallow_schemas[schema_name]
+                else:
+                    # Fallback: create a reference schema
+                    schema = Schema(
+                        type="object",
+                        properties={},
+                        description=f"Reference: {schema_name}",
+                    )
+
+                # Handle different locations
+                if location == "query":
+                    # Convert schema properties to query parameters
+                    if schema.properties:
+                        for prop_name, prop_info in schema.properties.items():
+                            param = Parameter(
+                                name=prop_name,
+                                location=ParameterLocation.QUERY,
+                                type=prop_info.get("type", "string"),
+                                required=prop_name in schema.required,
+                            )
+                            parameters.append(param)
+                elif location == "json":
+                    # Set as request body
+                    request_body = schema
+                elif location == "headers":
+                    # Convert schema properties to header parameters
+                    if schema.properties:
+                        for prop_name, prop_info in schema.properties.items():
+                            param = Parameter(
+                                name=prop_name,
+                                location=ParameterLocation.HEADER,
+                                type=prop_info.get("type", "string"),
+                                required=prop_name in schema.required,
+                            )
+                            parameters.append(param)
+
+        # Process response schemas from @blp.response decorators
+        if "response_schemas" in route.metadata:
+            for status_code, response_info in route.metadata[
+                "response_schemas"
+            ].items():
+                schema_name = response_info.get("schema")
+                many = response_info.get("many", False)
+
+                if not schema_name:
+                    continue
+
+                # Resolve schema from marshmallow_schemas if available
+                if schema_name in self.marshmallow_schemas:
+                    schema = self.marshmallow_schemas[schema_name]
+                else:
+                    # Fallback: create a reference schema
+                    schema = Schema(
+                        type="object",
+                        properties={},
+                        description=f"Reference: {schema_name}",
+                    )
+
+                # Wrap in array if many=True
+                if many:
+                    schema = Schema(type="array", items=schema)
+
+                responses.append(
+                    Response(
+                        status_code=status_code,
+                        description="Success",
+                        response_schema=schema,
+                        content_type="application/json",
+                    )
+                )
+
+        # Add default response if none specified
+        if not responses:
+            responses.append(
+                Response(
+                    status_code="200",
+                    description="Success",
+                    content_type="application/json",
+                )
+            )
+
+        return parameters, request_body, responses
 
     def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
         """
@@ -830,40 +1359,50 @@ class FlaskExtractor(BaseExtractor):
             # Parse path parameters
             parameters = self._extract_path_parameters(route.raw_path)
 
-            # Add query parameters from metadata
-            if "query_params" in route.metadata:
-                parameters.extend(route.metadata["query_params"])
-
-            # Get request body from metadata (Pydantic or Marshmallow)
-            request_body = route.metadata.get("request_body") or route.metadata.get("request_schema")
-
-            # Build responses list
-            responses = []
-
-            # Check for response schema from @marshal_with
-            if "response_schema" in route.metadata:
-                responses.append(
-                    Response(
-                        status_code="200",
-                        description="Success",
-                        response_schema=route.metadata["response_schema"],
-                        content_type="application/json",
-                    )
+            # Handle flask-smorest routes
+            if route.metadata.get("smorest"):
+                parameters, request_body, responses = self._process_smorest_metadata(
+                    route, parameters
                 )
             else:
-                # Default response without schema
-                responses.append(
-                    Response(
-                        status_code="200",
-                        description="Success",
-                        content_type="application/json",
-                    )
+                # Add query parameters from metadata
+                if "query_params" in route.metadata:
+                    parameters.extend(route.metadata["query_params"])
+
+                # Get request body from metadata (Pydantic or Marshmallow)
+                request_body = route.metadata.get("request_body") or route.metadata.get(
+                    "request_schema"
                 )
+
+                # Build responses list
+                responses = []
+
+                # Check for response schema from @marshal_with
+                if "response_schema" in route.metadata:
+                    responses.append(
+                        Response(
+                            status_code="200",
+                            description="Success",
+                            response_schema=route.metadata["response_schema"],
+                            content_type="application/json",
+                        )
+                    )
+                else:
+                    # Default response without schema
+                    responses.append(
+                        Response(
+                            status_code="200",
+                            description="Success",
+                            content_type="application/json",
+                        )
+                    )
 
             # Generate unique operation ID
             # OpenAPI requires operation IDs to be unique across all operations
             normalized_path = self._normalize_path(route.raw_path)
-            clean_path = normalized_path.replace("{", "").replace("}", "").replace("/", "_")
+            clean_path = (
+                normalized_path.replace("{", "").replace("}", "").replace("/", "_")
+            )
             clean_path = clean_path.lstrip("_")
             if not normalized_path.endswith("/") or normalized_path == "/":
                 clean_path = clean_path.rstrip("_")
@@ -872,10 +1411,16 @@ class FlaskExtractor(BaseExtractor):
 
             if route.handler_name == "<anonymous>":
                 # Anonymous handler: method_path
-                operation_id = f"{method_lower}_{clean_path}" if clean_path else method_lower
+                operation_id = (
+                    f"{method_lower}_{clean_path}" if clean_path else method_lower
+                )
             else:
                 # Named handler: handler_method_path
-                operation_id = f"{route.handler_name}_{method_lower}_{clean_path}" if clean_path else f"{route.handler_name}_{method_lower}"
+                operation_id = (
+                    f"{route.handler_name}_{method_lower}_{clean_path}"
+                    if clean_path
+                    else f"{route.handler_name}_{method_lower}"
+                )
 
             endpoint = Endpoint(
                 path=normalized_path,
@@ -926,6 +1471,24 @@ class FlaskExtractor(BaseExtractor):
 
             module_path = self.parser.get_node_text(module_name_node, source_code)
 
+            # Track flask_smorest imports
+            if module_path == "flask_smorest":
+                # Mark any Blueprint imports as coming from flask_smorest
+                # Iterate through all children to find all imported names
+                for child in import_node.children:
+                    if child.type in ("dotted_name", "identifier"):
+                        import_name = self.parser.get_node_text(child, source_code)
+                        if import_name == "Blueprint":
+                            self.smorest_imports.add("Blueprint")
+                    elif child.type == "aliased_import":
+                        actual_name_node = child.child_by_field_name("name")
+                        if actual_name_node:
+                            import_name = self.parser.get_node_text(
+                                actual_name_node, source_code
+                            )
+                            if import_name == "Blueprint":
+                                self.smorest_imports.add("Blueprint")
+
             # Get name or names list
             name_node = import_node.child_by_field_name("name")
             if not name_node:
@@ -942,11 +1505,13 @@ class FlaskExtractor(BaseExtractor):
                 actual_name_node = name_node.child_by_field_name("name")
                 alias_name_node = name_node.child_by_field_name("alias")
                 if actual_name_node and alias_name_node:
-                    import_name = self.parser.get_node_text(actual_name_node, source_code)
+                    import_name = self.parser.get_node_text(
+                        actual_name_node, source_code
+                    )
                     alias_name = self.parser.get_node_text(alias_name_node, source_code)
                     imports[alias_name] = f"{module_path}.{import_name}"
 
-            elif hasattr(name_node, 'children'):
+            elif hasattr(name_node, "children"):
                 # Import list: from x import (y, z as w, ...)
                 for child in name_node.children:
                     if child.type == "dotted_name" or child.type == "identifier":
@@ -956,15 +1521,17 @@ class FlaskExtractor(BaseExtractor):
                         actual_name_node = child.child_by_field_name("name")
                         alias_name_node = child.child_by_field_name("alias")
                         if actual_name_node and alias_name_node:
-                            import_name = self.parser.get_node_text(actual_name_node, source_code)
-                            alias_name = self.parser.get_node_text(alias_name_node, source_code)
+                            import_name = self.parser.get_node_text(
+                                actual_name_node, source_code
+                            )
+                            alias_name = self.parser.get_node_text(
+                                alias_name_node, source_code
+                            )
                             imports[alias_name] = f"{module_path}.{import_name}"
 
         return imports
 
-    def _find_marshmallow_schemas(
-        self, tree, source_code: bytes
-    ) -> Dict[str, Schema]:
+    def _find_marshmallow_schemas(self, tree, source_code: bytes) -> Dict[str, Schema]:
         """
         Find all Marshmallow Schema classes in the file.
 
@@ -996,7 +1563,9 @@ class FlaskExtractor(BaseExtractor):
                 continue
 
             # Check if Schema is in superclasses
-            superclasses_text = self.parser.get_node_text(superclasses_node, source_code)
+            superclasses_text = self.parser.get_node_text(
+                superclasses_node, source_code
+            )
             if "Schema" not in superclasses_text:
                 continue
 
@@ -1074,9 +1643,7 @@ class FlaskExtractor(BaseExtractor):
             # Map Marshmallow field types to OpenAPI types
             openapi_type = self._marshmallow_to_openapi_type(field_type)
 
-            properties[field_name] = {
-                "type": openapi_type
-            }
+            properties[field_name] = {"type": openapi_type}
 
         return Schema(
             type="object",
@@ -1161,7 +1728,13 @@ class FlaskExtractor(BaseExtractor):
                 else:
                     # Check if it's a schema instance (e.g., profile_schema = ProfileSchema())
                     # Look for the class name without "schema" suffix
-                    class_name = schema_name.replace("_schema", "").replace("_", " ").title().replace(" ", "") + "Schema"
+                    class_name = (
+                        schema_name.replace("_schema", "")
+                        .replace("_", " ")
+                        .title()
+                        .replace(" ", "")
+                        + "Schema"
+                    )
                     if class_name in imported_schemas:
                         schemas[schema_name] = imported_schemas[class_name]
 
@@ -1254,7 +1827,10 @@ class FlaskExtractor(BaseExtractor):
         return None
 
     def _extract_schema_decorators(
-        self, decorated_def_node, source_code: bytes, marshmallow_schemas: Dict[str, Schema]
+        self,
+        decorated_def_node,
+        source_code: bytes,
+        marshmallow_schemas: Dict[str, Schema],
     ) -> Dict[str, Any]:
         """
         Extract schema information from flask-apispec decorators.

@@ -1,0 +1,10 @@
+# Core dependencies for Lambda runtime (no dev tools, no server extras)
+tree-sitter>=0.21.0
+tree-sitter-python>=0.21.0
+tree-sitter-javascript>=0.21.0
+tree-sitter-typescript>=0.21.0
+tree-sitter-java>=0.21.0
+tree-sitter-c-sharp>=0.21.0
+tree-sitter-go>=0.21.0
+pydantic>=2.0.0
+pyyaml>=6.0

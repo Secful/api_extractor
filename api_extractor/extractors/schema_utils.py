@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Tuple, List, Optional
+from typing import Any, Tuple, List, Optional
 
 from api_extractor.core.models import Schema
 
@@ -352,3 +352,239 @@ def strip_wrapper_types(type_text: str, language: str = 'java') -> str:
             break
 
     return current
+
+
+def extract_nested_field_from_struct(
+    struct_schema: Schema,
+    field_path: str
+) -> Schema | None:
+    """
+    Extract a nested field from a struct/class schema.
+
+    Used for validator patterns where a validator struct has a nested field
+    representing the actual request/response type.
+
+    Args:
+        struct_schema: Parent schema containing the field
+        field_path: Field name or dot-separated path (e.g., "User" or "User.Profile")
+
+    Returns:
+        Schema of the nested field, or None if not found
+
+    Examples:
+        Validator struct has nested "User" field:
+        >>> validator_schema = Schema(
+        ...     type="object",
+        ...     properties={"User": {"type": "object", "properties": {"name": {"type": "string"}}}}
+        ... )
+        >>> nested = extract_nested_field_from_struct(validator_schema, "User")
+        >>> nested.type
+        'object'
+    """
+    if not struct_schema or not struct_schema.properties:
+        return None
+
+    # Split path by dots for nested access
+    parts = field_path.split('.')
+
+    current_schema = struct_schema
+    for part in parts:
+        if not current_schema.properties or part not in current_schema.properties:
+            return None
+
+        # Get the nested property
+        nested_prop = current_schema.properties[part]
+
+        # Convert dict to Schema if needed
+        if isinstance(nested_prop, dict):
+            # Check if this looks like a schema (has 'type' key)
+            if 'type' in nested_prop:
+                current_schema = Schema(**nested_prop)
+            else:
+                # Might be a simple type reference - return as-is wrapped in a schema
+                return Schema(type="object", properties=nested_prop)
+        elif isinstance(nested_prop, Schema):
+            current_schema = nested_prop
+        else:
+            return None
+
+    return current_schema
+
+
+def trace_method_return_type(
+    method_name: str,
+    source_tree: Any,
+    source_code: bytes,
+    language: str,
+    parser: Any
+) -> str | None:
+    """
+    Find a method/function definition and extract its return type.
+
+    Used for serializer patterns where a serializer object has a method that
+    returns the actual response type.
+
+    Args:
+        method_name: Method to find (e.g., "Response", "serialize")
+        source_tree: Tree-sitter tree
+        source_code: Source code bytes
+        language: Language ("go", "python", "java", etc.)
+        parser: LanguageParser instance for querying
+
+    Returns:
+        Return type name or None if not found
+
+    Examples:
+        Go: func (s *UserSerializer) Response() UserResponse {...}
+        Python: def serialize(self) -> UserResponse: ...
+        Java: public UserResponse serialize() {...}
+    """
+    if not source_tree or not parser:
+        return None
+
+    if language == "go":
+        # Query for method declaration with specific name
+        # Go: func (receiver Type) MethodName() ReturnType {...}
+        method_query = """
+        (method_declaration
+          name: (field_identifier) @method_name
+          result: (_) @return_type)
+        """
+
+        matches = parser.query(source_tree, method_query, "go")
+
+        for match in matches:
+            name_node = match.get("method_name")
+            return_node = match.get("return_type")
+
+            if not name_node or not return_node:
+                continue
+
+            name_text = parser.get_node_text(name_node, source_code)
+            if name_text == method_name:
+                return_text = parser.get_node_text(return_node, source_code)
+                # Clean up return type (remove pointers, etc.)
+                return_text = return_text.strip()
+                if return_text.startswith('*'):
+                    return_text = return_text[1:]
+                return return_text
+
+    elif language == "python":
+        # Python: def method_name(self) -> ReturnType: ...
+        method_query = """
+        (function_definition
+          name: (identifier) @method_name
+          return_type: (type) @return_type)
+        """
+
+        matches = parser.query(source_tree, method_query, "python")
+
+        for match in matches:
+            name_node = match.get("method_name")
+            return_node = match.get("return_type")
+
+            if not name_node or not return_node:
+                continue
+
+            name_text = parser.get_node_text(name_node, source_code)
+            if name_text == method_name:
+                return_text = parser.get_node_text(return_node, source_code)
+                return return_text.strip()
+
+    elif language == "java":
+        # Java: public ReturnType methodName() {...}
+        method_query = """
+        (method_declaration
+          name: (identifier) @method_name
+          type: (_) @return_type)
+        """
+
+        matches = parser.query(source_tree, method_query, "java")
+
+        for match in matches:
+            name_node = match.get("method_name")
+            return_node = match.get("return_type")
+
+            if not name_node or not return_node:
+                continue
+
+            name_text = parser.get_node_text(name_node, source_code)
+            if name_text == method_name:
+                return_text = parser.get_node_text(return_node, source_code)
+                return return_text.strip()
+
+    return None
+
+
+def find_type_in_variable_chain(
+    variable_name: str,
+    function_body: Any,
+    source_code: bytes,
+    language: str,
+    parser: Any
+) -> str | None:
+    """
+    Trace a variable through assignments to find its type.
+
+    Used to track variables from constructor calls to method invocations.
+
+    Args:
+        variable_name: Variable to trace
+        function_body: Function body node or text
+        source_code: Source code bytes
+        language: Language ("go", "python", "java", etc.)
+        parser: LanguageParser instance for text extraction
+
+    Returns:
+        Type name or None if not found
+
+    Examples:
+        Go: validator := NewUserValidator() → UserValidator
+        Python: serializer = UserSerializer() → UserSerializer
+        Java: UserService service = new UserService() → UserService
+    """
+    if not function_body or not parser:
+        return None
+
+    # Get body text for regex matching
+    body_text = parser.get_node_text(function_body, source_code)
+
+    if language == "go":
+        # Pattern 1: variable := NewTypeName()
+        # Extract type from constructor: NewUserValidator() → UserValidator
+        pattern1 = rf'{variable_name}\s*:=\s*New(\w+)\s*\('
+        match1 = re.search(pattern1, body_text)
+        if match1:
+            return match1.group(1)
+
+        # Pattern 2: variable := TypeName{...}
+        pattern2 = rf'{variable_name}\s*:=\s*(\*?)(\w+)\s*\{{'
+        match2 = re.search(pattern2, body_text)
+        if match2:
+            return match2.group(2)
+
+        # Pattern 3: var variable TypeName
+        pattern3 = rf'\bvar\s+{variable_name}\s+(\*?)(\w+(?:\.\w+)?)'
+        match3 = re.search(pattern3, body_text)
+        if match3:
+            type_text = match3.group(2)
+            # Remove package prefix if present
+            if '.' in type_text:
+                return type_text.split('.')[-1]
+            return type_text
+
+    elif language == "python":
+        # Pattern 1: variable = TypeName()
+        pattern1 = rf'{variable_name}\s*=\s*(\w+)\s*\('
+        match1 = re.search(pattern1, body_text)
+        if match1:
+            return match1.group(1)
+
+    elif language == "java":
+        # Pattern 1: TypeName variable = new TypeName()
+        pattern1 = rf'(\w+(?:<[^>]+>)?)\s+{variable_name}\s*=\s*new\s+(\w+)'
+        match1 = re.search(pattern1, body_text)
+        if match1:
+            return match1.group(1)
+
+    return None

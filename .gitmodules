@@ -31,12 +31,6 @@
 [submodule "tests/fixtures/real-world/javascript/express/qinglong-joi"]
 	path = tests/fixtures/real-world/javascript/express/qinglong-joi
 	url = https://github.com/whyour/qinglong.git
-[submodule "tests/fixtures/real-world/javascript/express/opencollective-zod"]
-	path = tests/fixtures/real-world/javascript/express/opencollective-zod
-	url = https://github.com/opencollective/opencollective-api.git
-[submodule "tests/fixtures/real-world/javascript/express/nocodb-ajv"]
-	path = tests/fixtures/real-world/javascript/express/nocodb-ajv
-	url = https://github.com/nocodb/nocodb.git
 [submodule "tests/fixtures/real-world/javascript/express/n8n-zod"]
 	path = tests/fixtures/real-world/javascript/express/n8n-zod
 	url = https://github.com/n8n-io/n8n.git
