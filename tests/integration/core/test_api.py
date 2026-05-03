@@ -16,7 +16,7 @@ def client():
 @pytest.fixture
 def minimal_fastapi_path():
     """Path to minimal FastAPI fixture."""
-    return str(Path(__file__).parent.parent / "fixtures" / "minimal" / "python")
+    return str(Path(__file__).parent.parent.parent / "fixtures" / "minimal" / "python")
 
 
 def test_health_endpoint(client):

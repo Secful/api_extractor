@@ -20,7 +20,7 @@ class TestOpenAPIBuilder:
         """Test building OpenAPI spec from Flask endpoints."""
         # Get fixture path
         fixture_dir = os.path.join(
-        str(os.path.dirname(__file__)), "..", "fixtures", "minimal", "python"
+        str(os.path.dirname(__file__)), "..", "..", "fixtures", "minimal", "python"
         )
 
         # Extract routes
@@ -43,7 +43,7 @@ class TestOpenAPIBuilder:
         """Test building OpenAPI spec from FastAPI endpoints."""
         # Get fixture path
         fixture_dir = os.path.join(
-        str(os.path.dirname(__file__)), "..", "fixtures", "minimal", "python"
+        str(os.path.dirname(__file__)), "..", "..", "fixtures", "minimal", "python"
         )
 
         # Extract routes
@@ -71,7 +71,7 @@ class TestOpenAPIBuilder:
         """Test building OpenAPI spec from Spring Boot endpoints."""
         # Get fixture path
         fixture_dir = os.path.join(
-        str(os.path.dirname(__file__)), "..", "fixtures", "minimal", "java"
+        str(os.path.dirname(__file__)), "..", "..", "fixtures", "minimal", "java"
         )
 
         # Extract routes
@@ -98,7 +98,7 @@ class TestOpenAPIBuilder:
     def test_json_serialization(self) -> None:
         """Test JSON serialization of OpenAPI spec."""
         fixture_dir = os.path.join(
-        str(os.path.dirname(__file__)), "..", "fixtures", "minimal", "python"
+        str(os.path.dirname(__file__)), "..", "..", "fixtures", "minimal", "python"
         )
 
         extractor = FlaskExtractor()
@@ -121,7 +121,7 @@ class TestOpenAPIBuilder:
     def test_yaml_serialization(self) -> None:
         """Test YAML serialization of OpenAPI spec."""
         fixture_dir = os.path.join(
-        str(os.path.dirname(__file__)), "..", "fixtures", "minimal", "python"
+        str(os.path.dirname(__file__)), "..", "..", "fixtures", "minimal", "python"
         )
 
         extractor = FlaskExtractor()
@@ -142,7 +142,7 @@ class TestOpenAPIBuilder:
     def test_custom_title_and_version(self) -> None:
         """Test that custom title and version are correctly set."""
         fixture_dir = os.path.join(
-        str(os.path.dirname(__file__)), "..", "fixtures", "minimal", "python"
+        str(os.path.dirname(__file__)), "..", "..", "fixtures", "minimal", "python"
         )
 
         extractor = FastAPIExtractor()
@@ -164,7 +164,7 @@ class TestOpenAPIBuilder:
     def test_paths_structure(self) -> None:
         """Test that paths are properly structured in the spec."""
         fixture_dir = os.path.join(
-        str(os.path.dirname(__file__)), "..", "fixtures", "minimal", "python"
+        str(os.path.dirname(__file__)), "..", "..", "fixtures", "minimal", "python"
         )
 
         extractor = FlaskExtractor()
@@ -195,7 +195,7 @@ class TestOpenAPIBuilder:
     def test_tags_generation(self) -> None:
         """Test that tags are properly generated from framework types."""
         fixture_dir = os.path.join(
-        str(os.path.dirname(__file__)), "..", "fixtures", "minimal", "python"
+        str(os.path.dirname(__file__)), "..", "..", "fixtures", "minimal", "python"
         )
 
         extractor = FastAPIExtractor()
