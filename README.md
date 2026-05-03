@@ -486,33 +486,24 @@ The most common deployment pattern for API Extractor is as a **sidecar container
 
 **Architecture:**
 
-```
-┌────────────────────────────────────────────────────────────┐
-│  Kubernetes Pod / Docker Compose Stack                     │
-│                                                             │
-│  ┌─────────────────┐       ┌─────────────────────────┐   │
-│  │  Application    │       │  API Extractor          │   │
-│  │  Container      │       │  (Sidecar)              │   │
-│  │                 │       │                         │   │
-│  │  :8080 (app)    │       │  :8000 (analysis API)   │   │
-│  │                 │       │                         │   │
-│  └────────┬────────┘       └──────────┬──────────────┘   │
-│           │                           │                   │
-│           └──────┬────────────────────┘                   │
-│                  │                                         │
-│         ┌────────▼────────┐                               │
-│         │ Shared Volume   │                               │
-│         │ /app/code       │                               │
-│         │ (Application    │                               │
-│         │  Source Code)   │                               │
-│         └─────────────────┘                               │
-└────────────────────────────────────────────────────────────┘
-                      │
-                      │ External Request
-                      ▼
-            Other services call
-            http://pod-ip:8000/api/v1/analyze
-            to get OpenAPI spec
+```mermaid
+graph TB
+    subgraph pod["Kubernetes Pod / Docker Compose Stack"]
+        app["Application Container<br/>:8080 (app)"]
+        extractor["API Extractor (Sidecar)<br/>:8000 (analysis API)"]
+        volume["Shared Volume<br/>/app/code<br/>(Application Source Code)"]
+
+        app -.-> volume
+        extractor -.-> volume
+    end
+
+    external["Other services"] -->|"HTTP POST<br/>http://pod-ip:8000/api/v1/analyze"| extractor
+    extractor -->|"Returns OpenAPI spec"| external
+
+    style pod fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style volume fill:#e1f5ff,stroke:#01579b
+    style extractor fill:#fff3e0,stroke:#e65100
+    style app fill:#f3e5f5,stroke:#4a148c
 ```
 
 **Example: Docker Compose Sidecar Setup**
@@ -1206,40 +1197,36 @@ The Lambda deployment uses three key AWS services:
 2. **Function URL** - Provides an HTTPS endpoint with IAM authentication
 3. **S3 Files** - Mounts an S3 bucket as a filesystem at `/mnt/s3` for reading source code
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  AWS Lambda Function (ARM64 Graviton)                           │
-│                                                                  │
-│  ┌────────────────────────────────────────────────────────┐    │
-│  │  Lambda Handler (handler.py)                           │    │
-│  │  - Receives HTTP request via Function URL              │    │
-│  │  - Reads code from S3 Files mount: /mnt/s3/lambda/    │    │
-│  │  - Runs api_extractor service                          │    │
-│  │  - Returns OpenAPI spec as JSON                        │    │
-│  └──────────────────┬─────────────────────────────────────┘    │
-│                     │                                            │
-│                     ▼                                            │
-│  ┌────────────────────────────────────────────────────────┐    │
-│  │  S3 Files Filesystem Mount: /mnt/s3/                   │    │
-│  │  └── lambda/                                           │    │
-│  │      ├── my-fastapi-app/    (source code)             │    │
-│  │      ├── my-flask-app/      (source code)             │    │
-│  │      └── my-spring-app/     (source code)             │    │
-│  └──────────────────┬─────────────────────────────────────┘    │
-│                     │                                            │
-└─────────────────────┼────────────────────────────────────────────┘
-                      │
-                      │ Backed by S3 Bucket
-                      ▼
-           ┌─────────────────────────┐
-           │  S3 Bucket              │
-           │  my-code-repositories   │
-           │                         │
-           │  s3://bucket/lambda/    │
-           │    ├── my-fastapi-app/  │
-           │    ├── my-flask-app/    │
-           │    └── my-spring-app/   │
-           └─────────────────────────┘
+```mermaid
+graph TB
+    client["Client"] -->|"HTTP POST with IAM signature"| funcurl["Function URL<br/>https://xyz.lambda-url.region.on.aws"]
+
+    subgraph lambda["AWS Lambda Function (ARM64 Graviton)"]
+        handler["Lambda Handler (handler.py)<br/>- Receives HTTP request<br/>- Reads from S3 Files mount<br/>- Runs api_extractor service<br/>- Returns OpenAPI spec"]
+
+        subgraph s3files["S3 Files Filesystem Mount: /mnt/s3/lambda/"]
+            fastapi["my-fastapi-app/<br/>(source code)"]
+            flask["my-flask-app/<br/>(source code)"]
+            spring["my-spring-app/<br/>(source code)"]
+        end
+
+        handler --> s3files
+    end
+
+    funcurl --> handler
+
+    subgraph s3["S3 Bucket: my-code-repositories"]
+        s3bucket["s3://bucket/lambda/<br/>├── my-fastapi-app/<br/>├── my-flask-app/<br/>└── my-spring-app/"]
+    end
+
+    s3files -.->|"Backed by"| s3bucket
+    handler -->|"Returns OpenAPI JSON"| funcurl
+    funcurl -->|"200 OK"| client
+
+    style lambda fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style s3files fill:#e1f5ff,stroke:#01579b
+    style s3 fill:#e8f5e9,stroke:#1b5e20
+    style handler fill:#fff9c4,stroke:#f57f17
 ```
 
 **Request Flow:**
@@ -2179,6 +2166,90 @@ Tested against **RealWorld** (https://github.com/gothinkster/spring-boot-realwor
 - ✅ Full RealWorld API specification (users, articles, profiles, comments, favorites, tags)
 
 ## Architecture
+
+### Extractor Architecture
+
+API Extractor supports multiple frameworks and validation libraries across different languages. The following diagram shows the complete extractor tree:
+
+```mermaid
+graph TB
+    root["API Extractor Core"]
+
+    subgraph python["Python Extractors"]
+        fastapi["FastAPI"]
+        flask["Flask"]
+        django["Django REST Framework"]
+
+        fastapi --> pydantic["Pydantic<br/>(built-in)"]
+        flask --> marshmallow["Marshmallow"]
+        flask --> flask_smorest["Flask-RESTX<br/>flask-smorest"]
+        django --> drf_serializers["DRF Serializers"]
+    end
+
+    subgraph javascript["JavaScript/TypeScript Extractors"]
+        express["Express"]
+        nestjs["NestJS"]
+        fastify_js["Fastify"]
+        nextjs["Next.js<br/>(App & Pages Router)"]
+
+        express --> joi["Joi"]
+        express --> zod["Zod"]
+        express --> ajv["AJV"]
+        nestjs --> class_validator["class-validator<br/>class-transformer"]
+        nestjs --> ts_types["TypeScript Types"]
+        nextjs --> nextjs_zod["Zod"]
+        fastify_js --> fastify_schema["Fastify JSON Schema"]
+    end
+
+    subgraph java["Java Extractors"]
+        spring["Spring Boot"]
+
+        spring --> hibernate["Hibernate Validator<br/>(JSR-380)"]
+        spring --> jackson["Jackson Annotations"]
+    end
+
+    subgraph csharp["C# Extractors"]
+        aspnet["ASP.NET Core"]
+
+        aspnet --> data_annotations["Data Annotations"]
+        aspnet --> fluent["FluentValidation"]
+    end
+
+    subgraph golang["Go Extractors"]
+        gin["Gin"]
+
+        gin --> go_validator["go-playground/validator"]
+        gin --> go_structs["Go Struct Tags"]
+    end
+
+    root --> python
+    root --> javascript
+    root --> java
+    root --> csharp
+    root --> golang
+
+    style root fill:#4caf50,stroke:#1b5e20,color:#fff,stroke-width:3px
+    style python fill:#3776ab,stroke:#1565c0,color:#fff
+    style javascript fill:#f7df1e,stroke:#f9a825
+    style java fill:#007396,stroke:#004d6d,color:#fff
+    style csharp fill:#9b4f96,stroke:#6a1b66,color:#fff
+    style golang fill:#00add8,stroke:#007d9c,color:#fff
+
+    style fastapi fill:#009688,stroke:#004d40,color:#fff
+    style flask fill:#000,stroke:#333,color:#fff
+    style django fill:#0c4b33,stroke:#062a1e,color:#fff
+    style express fill:#444,stroke:#222,color:#fff
+    style nestjs fill:#e0234e,stroke:#a01832,color:#fff
+    style nextjs fill:#000,stroke:#333,color:#fff
+    style spring fill:#6db33f,stroke:#4a7c2c,color:#fff
+    style aspnet fill:#512bd4,stroke:#3a1f9c,color:#fff
+    style gin fill:#00add8,stroke:#007d9c,color:#fff
+```
+
+**Legend:**
+- **Framework extractors** (darker boxes) - Parse route definitions and controller structures
+- **Validation libraries** (lighter boxes) - Extract request/response schemas and validation rules
+- **Multi-validation support** - Express supports Joi, Zod, and AJV simultaneously
 
 ### Project Structure
 
