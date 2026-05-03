@@ -258,6 +258,7 @@ class GinExtractor(BaseExtractor):
 
             if handler_info["is_qualified"]:
                 # Cross-file handler: package.HandlerName
+                # Note: Could also be same-file method (receiver.method), so fallback needed
                 package_alias = handler_info["package"]
                 handler_name = handler_info["name"]
 
@@ -293,6 +294,14 @@ class GinExtractor(BaseExtractor):
                         except ValueError:
                             # Package outside base_path
                             pass
+
+                # Fallback for same-file methods (e.g., h.signUp where h is receiver)
+                if not handler_schemas:
+                    self._current_file_structs = struct_schemas
+                    handler_schemas = self._extract_handler_schemas(
+                        handler_name, tree, source_code, struct_schemas
+                    )
+                    self._current_file_structs = {}
 
             else:
                 # Same-file handler - check package registry too
@@ -527,7 +536,7 @@ class GinExtractor(BaseExtractor):
 
     def _find_struct_definitions(self, tree, source_code: bytes) -> Dict[str, Schema]:
         """
-        Find all struct definitions in the Go file.
+        Find all struct definitions in the Go file, including inline definitions within functions.
 
         Args:
             tree: Syntax tree
@@ -538,7 +547,7 @@ class GinExtractor(BaseExtractor):
         """
         struct_schemas = {}
 
-        # Query for type declarations with struct types
+        # Query 1: Top-level type declarations
         struct_query = """
         (type_declaration
           (type_spec
@@ -558,6 +567,33 @@ class GinExtractor(BaseExtractor):
             struct_name = self.parser.get_node_text(struct_name_node, source_code)
 
             # Parse struct fields
+            schema = self._parse_struct_fields(struct_body_node, source_code)
+            if schema:
+                struct_schemas[struct_name] = schema
+
+        # Query 2: Inline type declarations inside functions
+        # Matches: type RequestBody struct { ... } inside function bodies
+        inline_type_query = """
+        (function_declaration
+          body: (block
+            (type_declaration
+              (type_spec
+                name: (type_identifier) @struct_name
+                type: (struct_type) @struct_body))))
+        """
+
+        inline_matches = self.parser.query(tree, inline_type_query, "go")
+
+        for match in inline_matches:
+            struct_name_node = match.get("struct_name")
+            struct_body_node = match.get("struct_body")
+
+            if not struct_name_node or not struct_body_node:
+                continue
+
+            struct_name = self.parser.get_node_text(struct_name_node, source_code)
+
+            # Parse struct fields (overwrites if same name exists)
             schema = self._parse_struct_fields(struct_body_node, source_code)
             if schema:
                 struct_schemas[struct_name] = schema
@@ -795,11 +831,17 @@ class GinExtractor(BaseExtractor):
 
         metadata = {}
 
-        # Query for function declaration
-        func_query = f"""
-        (function_declaration
-          name: (identifier) @func_name
-          body: (block) @func_body)
+        # Query for both function declarations and method declarations
+        # Methods have receivers like: func (h *Handler) signUp(c *gin.Context)
+        func_query = """
+        [
+          (function_declaration
+            name: (identifier) @func_name
+            body: (block) @func_body)
+          (method_declaration
+            name: (field_identifier) @func_name
+            body: (block) @func_body)
+        ]
         """
 
         matches = self.parser.query(tree, func_query, "go")
@@ -812,11 +854,18 @@ class GinExtractor(BaseExtractor):
                 continue
 
             func_name = self.parser.get_node_text(func_name_node, source_code)
-            if func_name != handler_name:
+
+            # Match handler name - handle both "signUp" and "h.signUp" formats
+            # Extract method name from "receiver.method" format
+            method_name = handler_name.split('.')[-1] if '.' in handler_name else handler_name
+
+            if func_name != method_name:
                 continue
 
             # Search for c.BindJSON, c.ShouldBindJSON, c.Bind calls (request body)
-            request_type = self._find_bind_call(func_body_node, source_code)
+            # Need to search the entire function including nested anonymous functions
+            func_text = self.parser.get_node_text(func_body_node, source_code)
+            request_type = self._find_bind_call_in_text(func_text)
             if request_type:
                 # Check if it's a slice first
                 if request_type.startswith("[]"):
@@ -841,33 +890,39 @@ class GinExtractor(BaseExtractor):
 
         return metadata
 
-    def _find_bind_call(self, body_node: Node, source_code: bytes) -> Optional[str]:
+    def _find_bind_call_in_text(self, body_text: str) -> Optional[str]:
         """
-        Find request binding and extract type.
+        Find request binding and extract type from function body text.
+
+        Searches the entire function body including nested anonymous functions.
 
         Supports:
         1. Direct: var req Type; c.BindJSON(&req)
         2. Direct composite: c.ShouldBindJSON(&TypeName{})
-        3. Indirect: validator := NewValidator(); validator.Bind(c)
-        4. Nested: Extract validator.User field from validator struct
 
         Args:
-            body_node: Function body node
-            source_code: Source code bytes
+            body_text: Function body as text
 
         Returns:
             Type name or None
         """
-        from api_extractor.extractors.schema_utils import (
-            extract_nested_field_from_struct,
-            find_type_in_variable_chain
-        )
-
-        body_text = self.parser.get_node_text(body_node, source_code)
-
         # Pattern 1: c.BindJSON(&variable) or c.ShouldBindJSON(&variable)
         # Need to find the variable declaration first
         bind_match = re.search(r'(?:BindJSON|ShouldBindJSON|Bind)\s*\(\s*&(\w+)', body_text)
+        if bind_match:
+            var_name = bind_match.group(1)
+            # Find variable declaration: var varName TypeName
+            var_pattern = rf'\bvar\s+{var_name}\s+(\[?\]?\*?\w+(?:\.\w+)?)'
+            var_match = re.search(var_pattern, body_text)
+            if var_match:
+                return var_match.group(1)
+
+        # Pattern 2: c.ShouldBindJSON(&TypeName{})
+        composite_match = re.search(r'(?:BindJSON|ShouldBindJSON|Bind)\s*\(\s*&(\[?\]?\w+(?:\.\w+)?)\{', body_text)
+        if composite_match:
+            return composite_match.group(1)
+
+        return None
         if bind_match:
             var_name = bind_match.group(1)
             # Find variable declaration: var varName TypeName
