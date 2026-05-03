@@ -85,6 +85,19 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 },
             )
 
+        # Check if OpenAPI spec was generated
+        if result.openapi_spec is None:
+            logger.warning("No endpoints found in analyzed folder")
+            return error_response(
+                200,
+                "No API endpoints found in the specified folder",
+                {
+                    "endpoints_count": 0,
+                    "frameworks_detected": [f.value for f in result.frameworks_detected],
+                    "warnings": result.warnings,
+                },
+            )
+
         # Return OpenAPI spec as JSON
         openapi_spec = result.openapi_spec.model_dump(exclude_none=True, by_alias=True)
 

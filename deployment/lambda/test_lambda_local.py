@@ -6,10 +6,11 @@ import json
 import os
 import sys
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add api_extractor/lambda to path for handler import
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(project_root, "api_extractor", "lambda"))
 
-from lambda_handler import lambda_handler
+from handler import lambda_handler
 
 # Set environment variables for local testing
 os.environ["S3_BUCKET_NAME"] = "test-bucket"

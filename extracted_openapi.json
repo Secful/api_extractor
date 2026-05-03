@@ -1,0 +1,530 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "fastapi-docflow API",
+    "version": "1.0.0"
+  },
+  "servers": [],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "root",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/main.py",
+        "x-api-extractor-source-line": 49
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "health_check",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/main.py",
+        "x-api-extractor-source-line": 59
+      }
+    },
+    "/signup": {
+      "post": {
+        "tags": [
+          "fastapi"
+        ],
+        "summary": "Create new user",
+        "operationId": "signup",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/auth/auth.py",
+        "x-api-extractor-source-line": 19
+      }
+    },
+    "/login": {
+      "post": {
+        "tags": [
+          "fastapi"
+        ],
+        "summary": "Create access and refresh tokens for user",
+        "operationId": "login",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/auth/auth.py",
+        "x-api-extractor-source-line": 32
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "summary": "Get details of currently logged in user",
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/auth/auth.py",
+        "x-api-extractor-source-line": 47
+      }
+    },
+    "/upload": {
+      "post": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "upload",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document.py",
+        "x-api-extractor-source-line": 30
+      }
+    },
+    "/{document}/detail": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "get_document_metadata",
+        "parameters": [
+          {
+            "name": "document",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/documents_metadata.py",
+        "x-api-extractor-source-line": 87
+      }
+    },
+    "/{document}": {
+      "put": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "update_doc_metadata_details",
+        "parameters": [
+          {
+            "name": "document",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/documents_metadata.py",
+        "x-api-extractor-source-line": 115
+      },
+      "delete": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "delete_document_metadata",
+        "parameters": [
+          {
+            "name": "document",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Returns None object"
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/documents_metadata.py",
+        "x-api-extractor-source-line": 161
+      }
+    },
+    "/archive/{file_name}": {
+      "post": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "archive",
+        "parameters": [
+          {
+            "name": "file_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/documents_metadata.py",
+        "x-api-extractor-source-line": 201
+      }
+    },
+    "/archive/list": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "archive_list",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/documents_metadata.py",
+        "x-api-extractor-source-line": 230
+      }
+    },
+    "/un-archive/{file}": {
+      "post": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "un_archive",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/documents_metadata.py",
+        "x-api-extractor-source-line": 257
+      }
+    },
+    "/share-link/{document}": {
+      "post": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "share_link_document",
+        "parameters": [
+          {
+            "name": "document",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document_sharing.py",
+        "x-api-extractor-source-line": 25
+      }
+    },
+    "/doc/{url_id}": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "redirect_to_share",
+        "parameters": [
+          {
+            "name": "url_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document_sharing.py",
+        "x-api-extractor-source-line": 92
+      }
+    },
+    "/share/{document}": {
+      "post": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "share_document",
+        "parameters": [
+          {
+            "name": "document",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Returns None object"
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document_sharing.py",
+        "x-api-extractor-source-line": 118
+      }
+    },
+    "/file/{file_name}/download": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "download",
+        "parameters": [
+          {
+            "name": "file_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Returns object object"
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document.py",
+        "x-api-extractor-source-line": 96
+      }
+    },
+    "/trash": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "list_bin",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document.py",
+        "x-api-extractor-source-line": 141
+      },
+      "delete": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "empty_trash",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Returns None object"
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document.py",
+        "x-api-extractor-source-line": 167
+      }
+    },
+    "/trash/{file_name}": {
+      "delete": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "perm_delete",
+        "parameters": [
+          {
+            "name": "file_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Returns None object"
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document.py",
+        "x-api-extractor-source-line": 192
+      }
+    },
+    "/restore/{file}": {
+      "post": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "restore_bin",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document.py",
+        "x-api-extractor-source-line": 236
+      }
+    },
+    "/{file_name}": {
+      "delete": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "add_to_bin",
+        "parameters": [
+          {
+            "name": "file_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Returns None object"
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document.py",
+        "x-api-extractor-source-line": 262
+      }
+    },
+    "/preview/{document}": {
+      "get": {
+        "tags": [
+          "fastapi"
+        ],
+        "operationId": "get_document_preview",
+        "parameters": [
+          {
+            "name": "document",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Returns FileResponse object"
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/mnt/s3files/fastapi-docflow/app/api/routes/documents/document.py",
+        "x-api-extractor-source-line": 289
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "fastapi"
+    }
+  ]
+}

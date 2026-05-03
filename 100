@@ -1,0 +1,6 @@
+BlueDragon28/gamesorting_webapp:utils/validation/listColumnsValidation.js: const { celebrate, Segments } = require("celebrate");
+BlueDragon28/gamesorting_webapp:utils/validation/listColumnsValidation.js: stars: "@Stars",
+othniel-agera/book-rental-store:utils/validator.util.js: const { celebrate, Joi, Segments } = require('celebrate');
+othniel-agera/book-rental-store:utils/validator.util.js: stars: Joi.number().max(5).min(1),
+rockcor/Viek:viek/frontend/src/domains/dsa/binary-search-tree/ApproachC.jsx: * ║  • Stars: Level/achievement indicators                                       ║
+rockcor/Viek:viek/frontend/src/domains/dsa/binary-search-tree/ApproachC.jsx: const { celebrate, celebrateBig } = useConfetti();

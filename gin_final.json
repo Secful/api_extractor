@@ -1,0 +1,999 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Extracted API",
+    "version": "1.0.0"
+  },
+  "servers": [],
+  "paths": {
+    "/api/ping/": {
+      "get": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "get_api_ping_",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/hello.go",
+        "x-api-extractor-source-line": 56
+      }
+    },
+    "/feed": {
+      "get": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleFeed_get_feed",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 14
+      }
+    },
+    "/": {
+      "get": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "UserRetrieve_get",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "bio": {
+                      "type": "string"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "token": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "email",
+                    "bio",
+                    "image",
+                    "token"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/users/routers.go",
+        "x-api-extractor-source-line": 18
+      },
+      "put": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "UserUpdate_put",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "bio": {
+                      "type": "string"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "token": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "email",
+                    "bio",
+                    "image",
+                    "token"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/users/routers.go",
+        "x-api-extractor-source-line": 20
+      },
+      "post": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "UsersRegistration_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "bio": {
+                    "type": "string"
+                  },
+                  "image": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "username",
+                  "email",
+                  "password",
+                  "bio",
+                  "image"
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "bio": {
+                      "type": "string"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "token": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "email",
+                    "bio",
+                    "image",
+                    "token"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/users/routers.go",
+        "x-api-extractor-source-line": 12
+      }
+    },
+    "/{slug}": {
+      "get": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleRetrieve_get_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ID": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "author": {
+                      "type": "object"
+                    },
+                    "tagList": {
+                      "type": "array"
+                    },
+                    "favorited": {
+                      "type": "boolean"
+                    },
+                    "favoritesCount": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "slug",
+                    "description",
+                    "body",
+                    "createdAt",
+                    "updatedAt",
+                    "author",
+                    "tagList",
+                    "favorited",
+                    "favoritesCount"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 29
+      },
+      "put": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleUpdate_put_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ID": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "author": {
+                      "type": "object"
+                    },
+                    "tagList": {
+                      "type": "array"
+                    },
+                    "favorited": {
+                      "type": "boolean"
+                    },
+                    "favoritesCount": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "slug",
+                    "description",
+                    "body",
+                    "createdAt",
+                    "updatedAt",
+                    "author",
+                    "tagList",
+                    "favorited",
+                    "favoritesCount"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 17
+      },
+      "delete": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleDelete_delete_slug",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 19
+      }
+    },
+    "/{slug}/": {
+      "put": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleUpdate_put_slug_",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ID": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "author": {
+                      "type": "object"
+                    },
+                    "tagList": {
+                      "type": "array"
+                    },
+                    "favorited": {
+                      "type": "boolean"
+                    },
+                    "favoritesCount": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "slug",
+                    "description",
+                    "body",
+                    "createdAt",
+                    "updatedAt",
+                    "author",
+                    "tagList",
+                    "favorited",
+                    "favoritesCount"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 18
+      }
+    },
+    "/{slug}/favorite": {
+      "post": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleFavorite_post_slug_favorite",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ID": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "author": {
+                      "type": "object"
+                    },
+                    "tagList": {
+                      "type": "array"
+                    },
+                    "favorited": {
+                      "type": "boolean"
+                    },
+                    "favoritesCount": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "slug",
+                    "description",
+                    "body",
+                    "createdAt",
+                    "updatedAt",
+                    "author",
+                    "tagList",
+                    "favorited",
+                    "favoritesCount"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 20
+      },
+      "delete": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleUnfavorite_delete_slug_favorite",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ID": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "author": {
+                      "type": "object"
+                    },
+                    "tagList": {
+                      "type": "array"
+                    },
+                    "favorited": {
+                      "type": "boolean"
+                    },
+                    "favoritesCount": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "slug",
+                    "description",
+                    "body",
+                    "createdAt",
+                    "updatedAt",
+                    "author",
+                    "tagList",
+                    "favorited",
+                    "favoritesCount"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 21
+      }
+    },
+    "/{slug}/comments": {
+      "get": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleCommentList_get_slug_comments",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 30
+      },
+      "post": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleCommentCreate_post_slug_comments",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "comment": {
+                    "type": "object",
+                    "properties": {
+                      "body": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "body"
+                    ]
+                  },
+                  "commentModel": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "comment"
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    },
+                    "author": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "body",
+                    "createdAt",
+                    "updatedAt",
+                    "author"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 22
+      }
+    },
+    "/{slug}/comments/{id}": {
+      "delete": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ArticleCommentDelete_delete_slug_comments_id",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/articles/routers.go",
+        "x-api-extractor-source-line": 23
+      }
+    },
+    "/login": {
+      "post": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "UsersLogin_post_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "bio": {
+                      "type": "string"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "token": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "email",
+                    "bio",
+                    "image",
+                    "token"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/users/routers.go",
+        "x-api-extractor-source-line": 13
+      }
+    },
+    "/{username}": {
+      "get": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ProfileRetrieve_get_username",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ID": {
+                      "type": "integer"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "bio": {
+                      "type": "string"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "following": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "bio",
+                    "image",
+                    "following"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/users/routers.go",
+        "x-api-extractor-source-line": 24
+      }
+    },
+    "/{username}/follow": {
+      "post": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ProfileFollow_post_username_follow",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ID": {
+                      "type": "integer"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "bio": {
+                      "type": "string"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "following": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "bio",
+                    "image",
+                    "following"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/users/routers.go",
+        "x-api-extractor-source-line": 28
+      },
+      "delete": {
+        "tags": [
+          "gin"
+        ],
+        "operationId": "ProfileUnfollow_delete_username_follow",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ID": {
+                      "type": "integer"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "bio": {
+                      "type": "string"
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "following": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "bio",
+                    "image",
+                    "following"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-api-extractor-source-file": "/Users/balderman/projects/api_extractor/tests/fixtures/real-world/go/gin/golang-gin-realworld-example-app/users/routers.go",
+        "x-api-extractor-source-line": 29
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "gin"
+    }
+  ]
+}

@@ -1307,20 +1307,30 @@ Lambda runs in a **VPC with private subnets** to access S3 Files:
 
 ### Deployment Setup
 
-All Lambda-related files are in `api_extractor/lambda/`:
+Lambda files are organized into two directories:
 
+**Python Lambda Code** (`api_extractor/lambda/`):
 ```
 api_extractor/lambda/
-├── handler.py              # Lambda entry point
-├── requirements.txt        # Lambda dependencies
+├── handler.py           # Lambda entry point
+└── requirements.txt     # Lambda dependencies
+```
+
+**Deployment Scripts** (`deployment/lambda/`):
+```
+deployment/lambda/
 ├── config.sh              # AWS configuration
 ├── build_lambda.sh        # Build ARM64 package
 ├── deploy_lambda.sh       # Deploy to AWS
 ├── setup_vpc.sh           # Create VPC
 ├── setup_s3_files.sh      # Create S3 Files filesystem
+├── setup_s3_files.py      # S3 Files setup helper
 ├── attach_s3_files.sh     # Attach filesystem to Lambda
 ├── create_function_url.sh # Create Function URL
 ├── cleanup.sh             # Delete Lambda function
+├── cleanup_vpc.sh         # Delete VPC resources
+├── test_lambda_local.py   # Local testing
+├── test_lambda_remote.sh  # Remote testing
 └── QUICK_START.md         # Quick reference guide
 ```
 
@@ -1347,7 +1357,7 @@ api_extractor/lambda/
 
 #### 1. Configure Deployment
 
-Edit `api_extractor/lambda/config.sh`:
+Edit `deployment/lambda/config.sh`:
 
 ```bash
 # Lambda Configuration
@@ -1367,7 +1377,7 @@ export LAMBDA_MEMORY=1024    # MB
 Set up VPC with private subnets for S3 Files:
 
 ```bash
-cd api_extractor/lambda
+cd deployment/lambda
 ./setup_vpc.sh
 ```
 
@@ -1747,7 +1757,7 @@ The `deploy_lambda.sh` script creates these permissions automatically.
 
 ```bash
 # Rebuild and redeploy
-cd api_extractor/lambda
+cd deployment/lambda
 ./build_lambda.sh
 ./deploy_lambda.sh
 ```
@@ -1779,7 +1789,7 @@ nano config.sh
 Run Lambda handler locally (requires uploaded code in S3):
 
 ```bash
-cd api_extractor/lambda
+cd deployment/lambda
 python test_lambda_local.py
 ```
 
@@ -1798,7 +1808,7 @@ python test_lambda_local.py
 #### Delete Lambda Function Only
 
 ```bash
-cd api_extractor/lambda
+cd deployment/lambda
 ./cleanup.sh
 ```
 
@@ -1840,7 +1850,7 @@ aws s3 rb s3://my-code-repositories --force
 
 **Solution:**
 ```bash
-cd api_extractor/lambda
+cd deployment/lambda
 ./attach_s3_files.sh
 ```
 
