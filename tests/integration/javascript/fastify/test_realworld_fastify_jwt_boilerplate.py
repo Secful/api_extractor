@@ -15,8 +15,7 @@ def jwt_boilerplate_path():
     """Get path to fastify-api-boilerplate-jwt fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "fastify",

@@ -26,8 +26,7 @@ def mentorship_path():
     """Get path to Mentorship Backend real-world fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "python",
         "flask",

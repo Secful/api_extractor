@@ -15,8 +15,7 @@ def alist_path() -> str:
     """Get path to Alist real-world fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",

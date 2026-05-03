@@ -15,8 +15,7 @@ def spring_boot_realworld_path():
     """Get path to Spring Boot RealWorld fixture."""
     return os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "java",
         "spring-boot",

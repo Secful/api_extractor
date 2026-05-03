@@ -15,8 +15,7 @@ def netbox_path():
     """Get path to NetBox real-world fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "python",
         "django",

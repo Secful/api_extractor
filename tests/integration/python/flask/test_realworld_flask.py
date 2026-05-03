@@ -11,8 +11,7 @@ def flask_realworld_path():
     """Get path to flask-realworld real-world fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "python",
         "flask",

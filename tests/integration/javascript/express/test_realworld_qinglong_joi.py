@@ -15,8 +15,7 @@ def qinglong_path():
     """Get path to Qinglong fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "express",

@@ -20,6 +20,9 @@ def eshop_path() -> str:
     path = os.path.join(
         str(os.path.dirname(__file__)),
         "..",
+        "..",
+        "..",
+        "..",
         "fixtures",
         "real-world",
         "csharp",

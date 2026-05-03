@@ -15,8 +15,7 @@ def realworld_path():
     """Get path to nestjs-realworld-example-app fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "nestjs",

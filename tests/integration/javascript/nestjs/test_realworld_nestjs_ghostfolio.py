@@ -15,8 +15,7 @@ def ghostfolio_path():
     """Get path to Ghostfolio fixture (monorepo /apps/api directory)."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "nestjs",

@@ -11,8 +11,7 @@ def express_examples_path():
     """Get path to express-examples real-world fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "express",

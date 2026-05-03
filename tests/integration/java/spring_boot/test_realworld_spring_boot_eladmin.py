@@ -15,8 +15,7 @@ def eladmin_path():
     """Get path to eladmin fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "java",
         "spring-boot",

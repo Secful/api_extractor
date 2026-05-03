@@ -13,8 +13,7 @@ def django_tutorial_path():
     # The ViewSets are in the snippets app at the root level
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "python",
         "django",

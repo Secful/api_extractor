@@ -15,8 +15,7 @@ def polar_path():
     """Get path to Polar real-world fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "python",
         "fastapi",

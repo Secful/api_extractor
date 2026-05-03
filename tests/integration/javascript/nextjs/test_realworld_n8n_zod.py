@@ -15,8 +15,7 @@ def n8n_path():
     """Get path to n8n fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "express",

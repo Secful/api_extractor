@@ -11,8 +11,7 @@ def fastify_demo_path():
     """Get path to fastify-demo real-world fixture."""
     return os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "fastify",

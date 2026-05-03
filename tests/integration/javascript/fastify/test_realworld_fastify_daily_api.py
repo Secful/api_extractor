@@ -15,8 +15,7 @@ def daily_api_path():
     """Get path to daily-api fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "fastify",

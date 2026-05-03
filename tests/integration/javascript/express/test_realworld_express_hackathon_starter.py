@@ -15,8 +15,7 @@ def hackathon_starter_path():
     """Get path to hackathon-starter fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "javascript",
         "express",

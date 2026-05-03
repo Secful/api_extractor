@@ -15,8 +15,7 @@ def flask_example_path() -> str:
     """Get path to flask-realworld-example-app fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "fixtures",
+        "..", "..", "..", "..", "fixtures",
         "real-world",
         "python",
         "flask",
