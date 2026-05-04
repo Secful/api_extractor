@@ -203,6 +203,70 @@ export default async function findUsers(fastify: FastifyRouteInstance) {
 - **Runtime Validation**: Automatic request/response validation
 - **Auto-completion**: IDE support with schema-based auto-completion
 
+### @fastify/autoload Support
+
+Fastify supports automatic loading of routes from directory structures using `@fastify/autoload`:
+
+```typescript
+import autoload from '@fastify/autoload';
+import path from 'path';
+
+// Automatically load all routes from src/routes/ directory
+await fastify.register(autoload, {
+  dir: path.join(import.meta.dirname, 'routes'),
+  autoHooks: true,      // Enable autohooks.ts pattern
+  cascadeHooks: true    // Cascade hooks to child routes
+});
+```
+
+**Directory Structure:**
+```
+src/routes/
+├── home.ts              → GET /
+├── api/
+│   ├── index.ts         → GET /api
+│   ├── autohooks.ts     → Hooks for /api/* routes
+│   ├── auth/
+│   │   └── index.ts     → POST /api/auth/login
+│   ├── tasks/
+│   │   └── index.ts     → GET /api/tasks, POST /api/tasks, etc.
+│   └── users/
+│       └── index.ts     → PUT /api/users/update-password
+```
+
+**How It Works:**
+1. **Automatic Discovery**: All `.js` and `.ts` files in the directory are automatically loaded
+2. **Prefix Calculation**: URL prefixes are derived from directory structure
+3. **Hook Cascading**: Parent hooks (`autohooks.ts`) apply to all child routes
+4. **Plugin Encapsulation**: Each file exports a Fastify plugin (async function)
+
+**Route File Example:**
+```typescript
+import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
+import { Type } from '@sinclair/typebox';
+
+const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
+  fastify.get('/', {
+    schema: {
+      response: { 200: Type.Object({ tasks: Type.Array(TaskSchema) }) }
+    },
+  }, async function () {
+    return { tasks: [] };
+  });
+};
+
+export default plugin;
+```
+
+**Autoload Features:**
+- ✅ Automatic route discovery from directory structure
+- ✅ URL prefix calculation from folder hierarchy
+- ✅ Hook cascading with `autoHooks: true`
+- ✅ Plugin encapsulation per file
+- ✅ index.ts files inherit parent directory name as prefix
+
+**Validated on:** fastify/demo (14 endpoints with complex routing)
+
 ## Next.js
 
 React framework with API Routes support (App Router & Pages Router).

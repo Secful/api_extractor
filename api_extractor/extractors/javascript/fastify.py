@@ -1,7 +1,9 @@
 """Fastify framework extractor."""
 
+import os
 import re
-from typing import List, Optional, Dict, Any
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Set
 from tree_sitter import Node
 
 from api_extractor.core.base_extractor import BaseExtractor
@@ -25,6 +27,8 @@ class FastifyExtractor(BaseExtractor):
     def __init__(self) -> None:
         """Initialize Fastify extractor."""
         super().__init__(FrameworkType.FASTIFY)
+        # Track processed files to avoid infinite loops with autoload
+        self._processed_files: Set[str] = set()
 
     def get_file_extensions(self) -> List[str]:
         """Get JavaScript/TypeScript file extensions."""
@@ -41,6 +45,12 @@ class FastifyExtractor(BaseExtractor):
             List of Route objects
         """
         routes = []
+
+        # Avoid processing the same file twice (can happen with autoload)
+        abs_path = os.path.abspath(file_path)
+        if abs_path in self._processed_files:
+            return routes
+        self._processed_files.add(abs_path)
 
         # Read file content
         source_code = self._read_file(file_path)
@@ -60,6 +70,11 @@ class FastifyExtractor(BaseExtractor):
 
         # Extract routes using .route() with object config: fastify.route({ method: 'GET', url: '/' })
         routes.extend(self._extract_route_object_routes(tree, source_code, language, file_path))
+
+        # Detect and follow @fastify/autoload registrations
+        autoload_dirs = self._detect_autoload_registrations(tree, source_code, language, file_path)
+        for autoload_dir in autoload_dirs:
+            routes.extend(self._extract_routes_from_autoload_dir(autoload_dir))
 
         return routes
 
@@ -751,3 +766,293 @@ class FastifyExtractor(BaseExtractor):
             endpoints.append(endpoint)
 
         return endpoints
+
+    def _detect_autoload_registrations(
+        self, tree, source_code: bytes, language: str, file_path: str
+    ) -> List[str]:
+        """
+        Detect @fastify/autoload registrations and extract directory paths.
+
+        Pattern: fastify.register(autoload, { dir: path.join(__dirname, 'routes') })
+        Also supports: fastify.register(require('@fastify/autoload'), { dir: ... })
+
+        Args:
+            tree: Tree-sitter parse tree
+            source_code: Source code bytes
+            language: Language (javascript or typescript)
+            file_path: Source file path
+
+        Returns:
+            List of absolute directory paths to scan for routes
+        """
+        autoload_dirs = []
+
+        # Query for fastify.register() calls
+        register_query = """
+        (call_expression
+          function: (member_expression
+            property: (property_identifier) @method_name)
+          arguments: (arguments) @args) @call_expr
+        """
+
+        register_matches = self.parser.query(tree, register_query, language)
+
+        for match in register_matches:
+            method_name_node = match.get("method_name")
+            args_node = match.get("args")
+
+            if not method_name_node or not args_node:
+                continue
+
+            method_name = self.parser.get_node_text(method_name_node, source_code)
+
+            # Check if it's a .register() call
+            if method_name != "register":
+                continue
+
+            # Get arguments
+            arg_nodes = [
+                child
+                for child in args_node.children
+                if child.type not in (",", "(", ")", "comment")
+            ]
+
+            if len(arg_nodes) < 2:
+                # Need at least 2 args: plugin and options
+                continue
+
+            # Check first argument - should be autoload identifier or require('@fastify/autoload')
+            first_arg = arg_nodes[0]
+            first_arg_text = self.parser.get_node_text(first_arg, source_code)
+
+            is_autoload = False
+            # Check for autoload identifier or require/import
+            if "autoload" in first_arg_text.lower():
+                is_autoload = True
+
+            if not is_autoload:
+                continue
+
+            # Extract dir from options object (second argument)
+            options_node = arg_nodes[1]
+            if options_node.type != "object":
+                continue
+
+            dir_path = self._extract_dir_from_autoload_options(
+                options_node, source_code, file_path
+            )
+            if dir_path and os.path.isdir(dir_path):
+                autoload_dirs.append(dir_path)
+
+        return autoload_dirs
+
+    def _extract_dir_from_autoload_options(
+        self, options_node: Node, source_code: bytes, file_path: str
+    ) -> Optional[str]:
+        """
+        Extract directory path from autoload options object.
+
+        Handles patterns like:
+        - { dir: path.join(__dirname, 'routes') }
+        - { dir: path.join(import.meta.dirname, 'routes') }
+        - { dir: './routes' }
+
+        Args:
+            options_node: Object node containing autoload options
+            source_code: Source code bytes
+            file_path: Current source file path (for resolving relative paths)
+
+        Returns:
+            Absolute directory path, or None if not found
+        """
+        for pair in options_node.children:
+            if pair.type != "pair":
+                continue
+
+            key_node = pair.child_by_field_name("key")
+            value_node = pair.child_by_field_name("value")
+
+            if not key_node or not value_node:
+                continue
+
+            key_text = self.parser.get_node_text(key_node, source_code)
+
+            # Remove quotes if present
+            if key_text.startswith(('"', "'")) and key_text.endswith(('"', "'")):
+                key_text = key_text[1:-1]
+
+            if key_text != "dir":
+                continue
+
+            # Extract directory path
+            dir_value = self._resolve_dir_path(value_node, source_code, file_path)
+            return dir_value
+
+        return None
+
+    def _resolve_dir_path(
+        self, value_node: Node, source_code: bytes, file_path: str
+    ) -> Optional[str]:
+        """
+        Resolve directory path from various patterns.
+
+        Supports:
+        - String literals: './routes'
+        - path.join(__dirname, 'routes')
+        - path.join(import.meta.dirname, 'routes')
+
+        Args:
+            value_node: Node containing the directory path expression
+            source_code: Source code bytes
+            file_path: Current source file path
+
+        Returns:
+            Absolute directory path, or None if cannot be resolved
+        """
+        # Handle string literals
+        if value_node.type == "string":
+            dir_path = self.parser.extract_string_value(value_node, source_code)
+            if dir_path:
+                # Resolve relative to current file
+                base_dir = os.path.dirname(file_path)
+                abs_path = os.path.normpath(os.path.join(base_dir, dir_path))
+                return abs_path
+
+        # Handle path.join() calls
+        if value_node.type == "call_expression":
+            value_text = self.parser.get_node_text(value_node, source_code)
+
+            # Check if it's a path.join call
+            if "path.join" not in value_text:
+                return None
+
+            # Extract string arguments from path.join()
+            args_node = value_node.child_by_field_name("arguments")
+            if not args_node:
+                return None
+
+            # Get all string arguments
+            string_args = []
+            for child in args_node.children:
+                if child.type == "string":
+                    str_val = self.parser.extract_string_value(child, source_code)
+                    if str_val:
+                        string_args.append(str_val)
+
+            # If we have string arguments, join them
+            if string_args:
+                # Use current file's directory as base
+                base_dir = os.path.dirname(file_path)
+                joined_path = os.path.join(*string_args)
+                abs_path = os.path.normpath(os.path.join(base_dir, joined_path))
+                return abs_path
+
+        return None
+
+    def _extract_routes_from_autoload_dir(self, dir_path: str) -> List[Route]:
+        """
+        Recursively extract routes from an autoload directory.
+
+        For each file in the directory:
+        1. Calculate URL prefix from directory structure
+        2. Extract routes from the file
+        3. Prepend the calculated prefix to each route
+
+        Args:
+            dir_path: Absolute path to autoload directory
+
+        Returns:
+            List of Route objects with prefixes applied
+        """
+        routes = []
+
+        # Get all JS/TS files in directory recursively
+        extensions = self.get_file_extensions()
+        for root, _, filenames in os.walk(dir_path):
+            for filename in filenames:
+                # Skip autohooks files - they don't contain routes
+                if filename == "autohooks.ts" or filename == "autohooks.js":
+                    continue
+
+                # Check if file has valid extension
+                if not any(filename.endswith(ext) for ext in extensions):
+                    continue
+
+                file_path = os.path.join(root, filename)
+
+                # Calculate URL prefix from directory structure
+                prefix = self._calculate_url_prefix(dir_path, file_path)
+
+                # Extract routes from file
+                file_routes = self.extract_routes_from_file(file_path)
+
+                # Apply prefix to each route
+                for route in file_routes:
+                    # Combine prefix with route path
+                    if prefix and prefix != "/":
+                        # Special case: if route path is just "/", use the prefix only
+                        if route.path == "/":
+                            route.path = prefix
+                            route.raw_path = prefix
+                        else:
+                            # Handle both cases: route.path starts with / or not
+                            if route.path.startswith("/"):
+                                route.path = prefix + route.path
+                            else:
+                                route.path = prefix + "/" + route.path
+
+                            # Update raw_path too
+                            if route.raw_path.startswith("/"):
+                                route.raw_path = prefix + route.raw_path
+                            else:
+                                route.raw_path = prefix + "/" + route.raw_path
+
+                    routes.append(route)
+
+        return routes
+
+    def _calculate_url_prefix(self, base_dir: str, file_path: str) -> str:
+        """
+        Calculate URL prefix from directory structure.
+
+        Rules (following @fastify/autoload conventions):
+        - Directory nesting = URL prefix hierarchy
+        - index.ts/index.js files inherit parent directory name
+        - Other files use their filename (without extension) as part of path
+        - File: routes/api/users/index.ts -> prefix: /api/users
+        - File: routes/api/auth/login.ts -> prefix: /api/auth (file name not used for non-index)
+
+        Args:
+            base_dir: Base autoload directory
+            file_path: Absolute path to route file
+
+        Returns:
+            URL prefix (e.g., '/api/users')
+        """
+        # Get relative path from base to file
+        rel_path = os.path.relpath(file_path, base_dir)
+
+        # Get directory and filename
+        dir_part = os.path.dirname(rel_path)
+        filename = os.path.basename(rel_path)
+
+        # Build prefix from directory structure
+        if dir_part == "" or dir_part == ".":
+            # File is directly in base_dir
+            prefix_parts = []
+        else:
+            # Split directory path into parts
+            prefix_parts = dir_part.split(os.sep)
+
+        # Handle special filenames
+        # For index.ts/index.js, use directory name as endpoint
+        # For other files, directory structure is the prefix (filename is ignored per autoload convention)
+        # This matches the fastify/demo pattern where routes/api/tasks/index.ts -> /api/tasks
+
+        # Build the prefix
+        if prefix_parts:
+            prefix = "/" + "/".join(prefix_parts)
+        else:
+            prefix = "/"
+
+        return prefix
