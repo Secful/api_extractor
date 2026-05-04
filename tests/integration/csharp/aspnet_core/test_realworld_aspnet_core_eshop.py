@@ -19,11 +19,7 @@ def eshop_path() -> str:
     """Get path to eShop real-world fixture."""
     path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..",
-        "..",
-        "..",
-        "..",
-        "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "csharp",
         "aspnet-core",

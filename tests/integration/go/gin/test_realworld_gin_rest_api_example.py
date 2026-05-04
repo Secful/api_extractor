@@ -18,7 +18,7 @@ from api_extractor.core.models import HTTPMethod
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -31,7 +31,7 @@ def test_gin_rest_api_example_extraction():
     """Test extraction from gin-rest-api-example."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -52,7 +52,7 @@ def test_gin_rest_api_example_extraction():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -65,7 +65,7 @@ def test_gin_rest_api_example_user_endpoints():
     """Test that user-related endpoints are extracted."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -97,7 +97,7 @@ def test_gin_rest_api_example_user_endpoints():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -110,7 +110,7 @@ def test_gin_rest_api_example_article_endpoints():
     """Test that article-related endpoints are extracted."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -142,7 +142,7 @@ def test_gin_rest_api_example_article_endpoints():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -155,7 +155,7 @@ def test_gin_rest_api_example_comment_endpoints():
     """Test that comment-related endpoints are extracted."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -178,7 +178,7 @@ def test_gin_rest_api_example_comment_endpoints():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -191,7 +191,7 @@ def test_gin_rest_api_example_http_methods():
     """Test that various HTTP methods are detected."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -216,7 +216,7 @@ def test_gin_rest_api_example_http_methods():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -229,7 +229,7 @@ def test_gin_rest_api_example_path_parameters():
     """Test that path parameters are properly extracted and normalized."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -256,7 +256,7 @@ def test_gin_rest_api_example_path_parameters():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -269,7 +269,7 @@ def test_gin_rest_api_example_source_tracking():
     """Test that source files and line numbers are tracked."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -293,7 +293,7 @@ def test_gin_rest_api_example_source_tracking():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -306,7 +306,7 @@ def test_gin_rest_api_example_route_groups():
     """Test that route groups and prefixes are properly applied."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -342,7 +342,7 @@ def test_gin_rest_api_example_route_groups():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -355,7 +355,7 @@ def test_gin_rest_api_example_unique_endpoints():
     """Test that path+method combinations are unique."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -379,7 +379,7 @@ def test_gin_rest_api_example_unique_endpoints():
     not os.path.exists(
         os.path.join(
             str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -392,7 +392,7 @@ def test_gin_rest_api_example_file_structure():
     """Test that routes are found in expected files."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",

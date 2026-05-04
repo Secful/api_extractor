@@ -14,7 +14,7 @@ from api_extractor.core.models import HTTPMethod
     not os.path.exists(
         os.path.join(
         str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -28,7 +28,7 @@ def test_realworld_extraction():
     # Get fixture path
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -49,7 +49,7 @@ def test_realworld_extraction():
     not os.path.exists(
         os.path.join(
         str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -62,7 +62,7 @@ def test_realworld_standard_paths():
     """Test that standard RealWorld paths are extracted."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -96,7 +96,7 @@ def test_realworld_standard_paths():
     not os.path.exists(
         os.path.join(
         str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -109,7 +109,7 @@ def test_realworld_http_methods():
     """Test that various HTTP methods are detected."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -134,7 +134,7 @@ def test_realworld_http_methods():
     not os.path.exists(
         os.path.join(
         str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -147,7 +147,7 @@ def test_realworld_path_parameters():
     """Test that path parameters are properly extracted."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -177,7 +177,7 @@ def test_realworld_path_parameters():
     not os.path.exists(
         os.path.join(
         str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -190,7 +190,7 @@ def test_realworld_source_tracking():
     """Test that source files and line numbers are tracked."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -214,7 +214,7 @@ def test_realworld_source_tracking():
     not os.path.exists(
         os.path.join(
         str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -227,7 +227,7 @@ def test_realworld_file_structure():
     """Test that routes are found in expected files."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -252,7 +252,7 @@ def test_realworld_file_structure():
     not os.path.exists(
         os.path.join(
         str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -265,7 +265,7 @@ def test_realworld_route_groups():
     """Test that route groups and prefixes are properly applied."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
@@ -296,7 +296,7 @@ def test_realworld_route_groups():
     not os.path.exists(
         os.path.join(
         str(os.path.dirname(__file__)),
-            "..", "..", "..", "..", "fixtures",
+            "..", "..", "..", "fixtures",
             "real-world",
             "go",
             "gin",
@@ -309,7 +309,7 @@ def test_realworld_no_duplicate_paths():
     """Test that there are no excessive duplicate path+method combinations."""
     fixture_path = os.path.join(
         str(os.path.dirname(__file__)),
-        "..", "..", "..", "..", "fixtures",
+        "..", "..", "..", "fixtures",
         "real-world",
         "go",
         "gin",
