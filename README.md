@@ -220,7 +220,9 @@ graph TB
         nestjs --> class_validator["class-validator<br/>class-transformer"]
         nestjs --> ts_types["TypeScript Types"]
         nextjs --> nextjs_zod["Zod"]
-        fastify_js --> fastify_schema["Fastify JSON Schema"]
+        fastify_js --> fastify_schema["JSON Schema"]
+        fastify_js --> typebox["TypeBox"]
+        fastify_js --> fastify_ajv["AJV"]
     end
 
     subgraph java["Java Extractors"]

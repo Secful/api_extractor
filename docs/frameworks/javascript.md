@@ -145,8 +145,63 @@ fastify.post('/users', async (request, reply) => {
 
 - ✅ Route registration (`fastify.get()`, `fastify.post()`, etc.)
 - ✅ Path parameters (`:param`)
-- ✅ Schema validation
+- ✅ Schema validation (JSON Schema, TypeBox)
 - ✅ Plugin patterns
+- ✅ Type providers (TypeBox)
+
+### TypeBox Integration
+
+Fastify supports TypeBox for type-safe schema validation with TypeScript:
+
+```typescript
+import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
+import { Type } from '@sinclair/typebox';
+
+// Define schemas with TypeBox
+const UserSchema = Type.Object({
+  id: Type.Number(),
+  name: Type.String(),
+  email: Type.String({ format: 'email' })
+});
+
+const FindUsersQuerySchema = Type.Object({
+  page: Type.Optional(Type.Number({ minimum: 1 })),
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 }))
+});
+
+// Use TypeBox schemas in routes
+export default async function findUsers(fastify: FastifyRouteInstance) {
+  fastify.withTypeProvider<TypeBoxTypeProvider>().route({
+    method: 'GET',
+    url: '/v1/users',
+    schema: {
+      description: 'Find users',
+      querystring: FindUsersQuerySchema,
+      response: {
+        200: Type.Object({
+          data: Type.Array(UserSchema),
+          total: Type.Number()
+        })
+      },
+      tags: ['users']
+    },
+    handler: async (req, res) => {
+      // Handler with full TypeScript type inference
+      const { page = 1, limit = 10 } = req.query;
+      return res.status(200).send({
+        data: [],
+        total: 0
+      });
+    }
+  });
+}
+```
+
+**TypeBox Features:**
+- **Static Type Inference**: Full TypeScript type safety from schemas
+- **JSON Schema**: Compiles to standard JSON Schema for validation
+- **Runtime Validation**: Automatic request/response validation
+- **Auto-completion**: IDE support with schema-based auto-completion
 
 ## Next.js
 
@@ -261,8 +316,43 @@ API Extractor can extract validation schemas from common JavaScript/TypeScript l
 |-----------|---------------------|
 | Express | Joi, Zod, AJV |
 | NestJS | class-validator, class-transformer, TypeScript Types |
-| Fastify | Fastify JSON Schema |
+| Fastify | Fastify JSON Schema, **TypeBox**, AJV |
 | Next.js | Zod |
+
+### TypeBox Support
+
+Fastify has first-class support for [TypeBox](https://github.com/sinclairzx81/typebox) via `@fastify/type-provider-typebox`:
+
+- **Type Safety**: Full TypeScript inference from schemas to request/response types
+- **JSON Schema**: Generates standard JSON Schema for validation
+- **Performance**: Optimized for Fastify's schema compilation
+- **Ecosystem**: Works with Fastify plugins and decorators
+
+Example with TypeBox:
+```typescript
+import { Type } from '@sinclair/typebox';
+import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
+
+const UserSchema = Type.Object({
+  id: Type.Number(),
+  name: Type.String(),
+  email: Type.String({ format: 'email' })
+});
+
+fastify.withTypeProvider<TypeBoxTypeProvider>().route({
+  method: 'GET',
+  url: '/users/:id',
+  schema: {
+    params: Type.Object({ id: Type.Number() }),
+    response: { 200: UserSchema }
+  },
+  handler: async (req, res) => {
+    // req.params.id is typed as number
+    // response must match UserSchema
+    return { id: req.params.id, name: 'John', email: 'john@example.com' };
+  }
+});
+```
 
 ## Known Limitations
 
