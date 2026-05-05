@@ -37,3 +37,6 @@
 [submodule "tests/fixtures/real-world/python/fastapi/autogpt"]
 	path = tests/fixtures/real-world/python/fastapi/autogpt
 	url = https://github.com/Significant-Gravitas/AutoGPT.git
+[submodule "tests/fixtures/real-world/python/flask/rest-apis-flask-python"]
+	path = tests/fixtures/real-world/python/flask/rest-apis-flask-python
+	url = https://github.com/tecladocode/rest-apis-flask-python.git

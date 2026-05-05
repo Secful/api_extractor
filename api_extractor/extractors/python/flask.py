@@ -756,10 +756,9 @@ class FlaskExtractor(BaseExtractor):
             if method_name != "route":
                 continue
 
-            # If namespace var is not known, add it with default "" prefix
-            # (namespaces might be imported from other files)
+            # Skip if namespace var is not a known RESTX namespace
             if namespace_var not in self.namespaces:
-                self.namespaces[namespace_var] = ""
+                continue
 
             # Extract path from decorator arguments
             path = self._extract_path_from_arguments(args_node, source_code)
