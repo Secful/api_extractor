@@ -34,3 +34,6 @@
 [submodule "tests/fixtures/real-world/javascript/express/n8n-zod"]
 	path = tests/fixtures/real-world/javascript/express/n8n-zod
 	url = https://github.com/n8n-io/n8n.git
+[submodule "tests/fixtures/real-world/python/fastapi/autogpt"]
+	path = tests/fixtures/real-world/python/fastapi/autogpt
+	url = https://github.com/Significant-Gravitas/AutoGPT.git
