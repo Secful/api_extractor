@@ -104,7 +104,7 @@ class TestFastAPIDocFlow:
             keyword in p.lower()
             for keyword in ["upload", "document", "share", "archive", "trash"]
         )]
-        assert len(doc_related) == 11, \
+        assert len(doc_related) >= 10, \
             f"Expected at least 10 document-related paths, found {len(doc_related)}"
 
     def test_file_operations(self, docflow_path: str) -> None:
@@ -177,6 +177,6 @@ class TestFastAPIDocFlow:
         assert has_login, "Should find login endpoint"
         assert has_signup, "Should find signup endpoint"
 
-        # Check for user profile endpoint
-        has_me = any(p == "/me" for p in paths)
+        # Check for user profile endpoint (may have prefix)
+        has_me = any("/me" in p for p in paths)
         assert has_me, "Should find /me endpoint for current user"

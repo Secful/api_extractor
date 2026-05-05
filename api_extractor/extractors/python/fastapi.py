@@ -1,5 +1,6 @@
 """FastAPI framework extractor."""
 
+import os
 import re
 from typing import List, Optional, Dict, Any
 from tree_sitter import Node
@@ -35,6 +36,9 @@ class FastAPIExtractor(BaseExtractor):
         # Map of router variable names to prefix from include_router(prefix=...) calls
         # e.g., {"v1_router": "/api", "integrations_router": "/api/integrations"}
         self.router_include_prefixes: Dict[str, str] = {}
+        # Map of router import aliases to (source_file, original_variable_name)
+        # e.g., {"analytics_router": ("/path/analytics.py", "router")}
+        self.router_imports: Dict[str, tuple[str, str]] = {}
         # FastAPI app variable names (e.g., ["app"])
         self.app_variables: set = set()
         # Base path for the project (set during extract())
@@ -65,6 +69,7 @@ class FastAPIExtractor(BaseExtractor):
         self.router_definitions = {}
         self.router_includes = {}
         self.router_include_prefixes = {}
+        self.router_imports = {}
         self.app_variables = set()
         self.base_path = path
         self.global_prefix = None
@@ -72,11 +77,12 @@ class FastAPIExtractor(BaseExtractor):
         # Find all relevant files
         files = self._find_source_files(path)
 
-        # Pass 1: Extract router definitions to find prefixes
+        # Pass 1: Extract router definitions and imports to find prefixes
         # Also detect global prefix from main router files
         for file_path in files:
             try:
                 self._extract_router_definitions(file_path)
+                self._extract_router_imports(file_path)
                 # Check if this is a main aggregator file
                 filename = file_path.split('/')[-1]
                 if filename in ('api.py', 'main.py', 'app.py') and self.global_prefix is None:
@@ -190,13 +196,159 @@ class FastAPIExtractor(BaseExtractor):
             if func_name != "APIRouter":
                 continue
 
-            # Extract prefix from arguments
+            # Extract prefix from arguments (can be None/empty)
             prefix = self._extract_prefix_from_arguments(args_node, source_code)
-            if prefix:
-                file_routers[var_name] = prefix
+            # Store router even if no prefix (prefix can be empty string)
+            file_routers[var_name] = prefix or ""
 
         if file_routers:
             self.router_definitions[file_path] = file_routers
+
+    def _extract_router_imports(self, file_path: str) -> None:
+        """
+        Extract router imports and resolve them to source files.
+
+        Parses patterns like:
+        from .features.analytics import router as analytics_router
+        from backend.api.features.store.routes import router
+
+        Builds mapping of aliases to (source_file, original_variable_name).
+
+        Args:
+            file_path: Path to Python file
+        """
+        source_code = self._read_file(file_path)
+        if not source_code:
+            return
+
+        tree = self.parser.parse_source(source_code, "python")
+        if not tree:
+            return
+
+        # Query for aliased imports: from X import Y as Z
+        aliased_import_query = """
+        (import_from_statement
+          module_name: (relative_import) @rel_module_name
+          name: (aliased_import
+            name: (dotted_name) @import_name
+            alias: (identifier) @alias_name))
+        """
+
+        # Query for simple imports: from X import Y (no alias)
+        simple_import_query = """
+        (import_from_statement
+          module_name: (relative_import) @rel_module_name
+          name: (dotted_name) @import_name)
+        """
+
+        # Query for absolute aliased imports: from X import Y as Z
+        absolute_aliased_query = """
+        (import_from_statement
+          module_name: (dotted_name) @abs_module_name
+          name: (aliased_import
+            name: (dotted_name) @import_name
+            alias: (identifier) @alias_name))
+        """
+
+        # Query for absolute simple imports: from X import Y
+        absolute_simple_query = """
+        (import_from_statement
+          module_name: (dotted_name) @abs_module_name
+          name: (dotted_name) @import_name)
+        """
+
+        matches = self.parser.query(tree, aliased_import_query, "python")
+        matches.extend(self.parser.query(tree, simple_import_query, "python"))
+        matches.extend(self.parser.query(tree, absolute_aliased_query, "python"))
+        matches.extend(self.parser.query(tree, absolute_simple_query, "python"))
+
+        for match in matches:
+            # Get module name (can be relative or absolute)
+            module_name_node = match.get("rel_module_name") or match.get("abs_module_name")
+            import_name_node = match.get("import_name")
+            alias_name_node = match.get("alias_name")
+
+            if not module_name_node or not import_name_node:
+                continue
+
+            module_name = self.parser.get_node_text(module_name_node, source_code)
+            import_name = self.parser.get_node_text(import_name_node, source_code)
+
+            # Use alias if present, otherwise use import name
+            alias_name = self.parser.get_node_text(alias_name_node, source_code) if alias_name_node else import_name
+
+            # Skip non-router imports
+            if "router" not in import_name.lower():
+                continue
+
+            # Resolve module path to actual file
+            source_file = self._resolve_import_to_file(module_name, file_path)
+            if source_file:
+                self.router_imports[alias_name] = (source_file, import_name)
+
+    def _resolve_import_to_file(self, module_name: str, current_file: str) -> Optional[str]:
+        """
+        Resolve Python import path to actual file path.
+
+        Handles:
+        - Relative imports: .features.analytics -> features/analytics.py
+        - Absolute imports: backend.api.features.analytics -> backend/api/features/analytics.py
+
+        Args:
+            module_name: Import module name (can be relative with dots)
+            current_file: Path to current file (for resolving relative imports)
+
+        Returns:
+            Absolute path to the imported file, or None if not found
+        """
+        current_dir = os.path.dirname(current_file)
+
+        # Handle relative imports
+        if module_name.startswith("."):
+            # Count leading dots
+            # 1 dot = current package (no directory change)
+            # 2 dots = parent package (go up 1 dir)
+            # 3 dots = grandparent package (go up 2 dirs)
+            dots = len(module_name) - len(module_name.lstrip("."))
+            level = dots - 1  # Adjust: 1 dot = level 0, 2 dots = level 1, etc.
+            module_parts = module_name.lstrip(".").split(".")
+
+            # Go up 'level' directories
+            target_dir = current_dir
+            for _ in range(level):
+                target_dir = os.path.dirname(target_dir)
+
+            # Append module parts
+            if module_parts and module_parts[0]:
+                target_path = os.path.join(target_dir, *module_parts)
+            else:
+                target_path = target_dir
+
+            # Try .py file
+            if os.path.isfile(target_path + ".py"):
+                return os.path.abspath(target_path + ".py")
+            # Try __init__.py in directory
+            if os.path.isdir(target_path):
+                init_file = os.path.join(target_path, "__init__.py")
+                if os.path.isfile(init_file):
+                    return os.path.abspath(init_file)
+
+        # Handle absolute imports (search from base_path)
+        else:
+            module_parts = module_name.split(".")
+            # Try from base_path
+            target_path = os.path.join(self.base_path, *module_parts)
+
+            # Try .py file
+            if os.path.isfile(target_path + ".py"):
+                return os.path.abspath(target_path + ".py")
+            # Try __init__.py in directory
+            if os.path.isdir(target_path):
+                init_file = os.path.join(target_path, "__init__.py")
+                if os.path.isfile(init_file):
+                    return os.path.abspath(init_file)
+
+        return None
 
     def _extract_prefix_from_arguments(self, args_node: Node, source_code: bytes) -> Optional[str]:
         """
@@ -310,9 +462,10 @@ class FastAPIExtractor(BaseExtractor):
         Get the complete URL prefix chain for routes in a given file.
 
         Priority order:
-        1. Prefix from include_router(router_name, prefix="/api")
-        2. Prefix from APIRouter(prefix="/local") + global prefix
-        3. Global prefix only
+        1. Prefix from include_router(alias, prefix="/api") via import resolution
+        2. Prefix from include_router(router_name, prefix="/api") via direct name
+        3. Prefix from APIRouter(prefix="/local") + global prefix
+        4. Global prefix only
 
         Args:
             file_path: Absolute path to the file
@@ -320,6 +473,9 @@ class FastAPIExtractor(BaseExtractor):
         Returns:
             Full URL prefix (e.g., '/api/store') or None
         """
+        # Normalize file path for comparison
+        abs_file_path = os.path.abspath(file_path)
+
         # Check if this is the main router file (api.py, main.py, app.py)
         filename = file_path.split('/')[-1]
         if filename in ('api.py', 'main.py', 'app.py'):
@@ -343,11 +499,21 @@ class FastAPIExtractor(BaseExtractor):
         router_name = next(iter(file_routers.keys()))
         local_prefix = file_routers[router_name]
 
-        # Priority 1: Check if this router was included with an explicit prefix
+        # Priority 1: Check if this router was imported with an alias and included with prefix
+        # Look through router_imports to find aliases that point to this file
+        for alias_name, (source_file, original_name) in self.router_imports.items():
+            # Match by file path and original variable name
+            if os.path.abspath(source_file) == abs_file_path and original_name == router_name:
+                # Found an import alias for this router
+                # Check if this alias has a prefix from include_router
+                if alias_name in self.router_include_prefixes:
+                    return self.router_include_prefixes[alias_name]
+
+        # Priority 2: Check if this router was included with an explicit prefix using direct name
         if router_name in self.router_include_prefixes:
             return self.router_include_prefixes[router_name]
 
-        # Priority 2: Compose global prefix + local prefix from APIRouter(prefix=...)
+        # Priority 3: Compose global prefix + local prefix from APIRouter(prefix=...)
         if self.global_prefix:
             # Ensure prefixes are properly formatted
             global_part = self.global_prefix.rstrip("/")
@@ -358,7 +524,7 @@ class FastAPIExtractor(BaseExtractor):
                 local_part = "/" + local_part
             return global_part + local_part
 
-        # Priority 3: No global prefix, just return local
+        # Priority 4: No global prefix, just return local
         return local_prefix
 
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
