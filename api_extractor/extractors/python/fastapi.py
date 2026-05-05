@@ -26,12 +26,17 @@ class FastAPIExtractor(BaseExtractor):
     def __init__(self) -> None:
         """Initialize FastAPI extractor."""
         super().__init__(FrameworkType.FASTAPI)
-        # Map of file paths to router variable names and their prefixes
+        # Map of file paths to router variable names and their prefixes from APIRouter(prefix=...)
         # e.g., {"/path/to/endpoints.py": {"router": "/organizations"}}
         self.router_definitions: Dict[str, Dict[str, str]] = {}
         # Map of router variable names to their URL prefixes after include
         # e.g., {"/v1": {"/organizations": "organization_router"}}
         self.router_includes: Dict[str, Dict[str, str]] = {}
+        # Map of router variable names to prefix from include_router(prefix=...) calls
+        # e.g., {"v1_router": "/api", "integrations_router": "/api/integrations"}
+        self.router_include_prefixes: Dict[str, str] = {}
+        # FastAPI app variable names (e.g., ["app"])
+        self.app_variables: set = set()
         # Base path for the project (set during extract())
         self.base_path: str = ""
         # Global prefix from main router file (api.py, main.py, app.py)
@@ -59,6 +64,8 @@ class FastAPIExtractor(BaseExtractor):
         self.warnings = []
         self.router_definitions = {}
         self.router_includes = {}
+        self.router_include_prefixes = {}
+        self.app_variables = set()
         self.base_path = path
         self.global_prefix = None
 
@@ -120,11 +127,11 @@ class FastAPIExtractor(BaseExtractor):
 
     def _extract_router_definitions(self, file_path: str) -> None:
         """
-        Extract APIRouter definitions and their prefixes from a file.
+        Extract APIRouter and FastAPI app definitions from a file.
 
         Parses patterns like:
         router = APIRouter(prefix="/organizations")
-        organization_router = APIRouter(prefix="/orgs", tags=["orgs"])
+        app = FastAPI(...)
 
         Builds mapping of file paths to router variable names and prefixes.
 
@@ -139,8 +146,8 @@ class FastAPIExtractor(BaseExtractor):
         if not tree:
             return
 
-        # Query for router assignments: router = APIRouter(...)
-        router_query = """
+        # Query for assignments: router = APIRouter(...) or app = FastAPI(...)
+        assignment_query = """
         (assignment
           left: (identifier) @var_name
           right: (call
@@ -148,7 +155,19 @@ class FastAPIExtractor(BaseExtractor):
             arguments: (argument_list) @args))
         """
 
-        matches = self.parser.query(tree, router_query, "python")
+        # Also query for attribute calls: app = fastapi.FastAPI(...)
+        attribute_assignment_query = """
+        (assignment
+          left: (identifier) @var_name
+          right: (call
+            function: (attribute
+              object: (identifier) @module_name
+              attribute: (identifier) @func_name)
+            arguments: (argument_list) @args))
+        """
+
+        matches = self.parser.query(tree, assignment_query, "python")
+        matches.extend(self.parser.query(tree, attribute_assignment_query, "python"))
 
         file_routers = {}
         for match in matches:
@@ -160,10 +179,16 @@ class FastAPIExtractor(BaseExtractor):
                 continue
 
             func_name = self.parser.get_node_text(func_name_node, source_code)
-            if func_name != "APIRouter":
+            var_name = self.parser.get_node_text(var_name_node, source_code)
+
+            # Track FastAPI app instantiations
+            if func_name == "FastAPI":
+                self.app_variables.add(var_name)
                 continue
 
-            var_name = self.parser.get_node_text(var_name_node, source_code)
+            # Track APIRouter definitions
+            if func_name != "APIRouter":
+                continue
 
             # Extract prefix from arguments
             prefix = self._extract_prefix_from_arguments(args_node, source_code)
@@ -199,13 +224,14 @@ class FastAPIExtractor(BaseExtractor):
 
     def _extract_router_includes(self, file_path: str) -> None:
         """
-        Extract router.include_router() calls to build inclusion hierarchy.
+        Extract router.include_router() and app.include_router() calls.
 
         Parses patterns like:
-        router.include_router(organization_router)
-        app.include_router(router)
+        router.include_router(organization_router, prefix="/orgs")
+        app.include_router(router, prefix="/api")
+        app.include_router(backend.api.features.v1.v1_router, tags=["v1"], prefix="/api")
 
-        Builds mapping of parent prefixes to child routers.
+        Extracts the prefix keyword argument and stores router->prefix mapping.
 
         Args:
             file_path: Path to Python file
@@ -218,7 +244,7 @@ class FastAPIExtractor(BaseExtractor):
         if not tree:
             return
 
-        # Query for include_router calls: router.include_router(other_router)
+        # Query for include_router calls: router.include_router(other_router, prefix="/api")
         include_query = """
         (expression_statement
           (call
@@ -244,22 +270,36 @@ class FastAPIExtractor(BaseExtractor):
 
             parent_router_name = self.parser.get_node_text(parent_router_node, source_code)
 
-            # Extract child router name from arguments
+            # Extract child router name from first positional argument
             child_router_name = None
             for child in args_node.children:
+                # Handle: router_name, module.router_name, or backend.api.features.store.routes.router
                 if child.type == "identifier":
                     child_router_name = self.parser.get_node_text(child, source_code)
+                    break
+                elif child.type == "attribute":
+                    # For dotted names like backend.api.features.v1.v1_router
+                    full_name = self.parser.get_node_text(child, source_code)
+                    # Extract last component as router name
+                    child_router_name = full_name.split(".")[-1]
                     break
 
             if not child_router_name:
                 continue
 
-            # Look up parent router prefix in current file
+            # Extract prefix from keyword arguments
+            include_prefix = self._extract_prefix_from_arguments(args_node, source_code)
+
+            # Store router->prefix mapping from include_router call
+            if include_prefix:
+                self.router_include_prefixes[child_router_name] = include_prefix
+
+            # Legacy: Look up parent router prefix in current file
             parent_prefix = None
             if file_path in self.router_definitions:
                 parent_prefix = self.router_definitions[file_path].get(parent_router_name)
 
-            # Store the relationship
+            # Store the relationship (legacy)
             if parent_prefix is not None:
                 if parent_prefix not in self.router_includes:
                     self.router_includes[parent_prefix] = {}
@@ -269,13 +309,16 @@ class FastAPIExtractor(BaseExtractor):
         """
         Get the complete URL prefix chain for routes in a given file.
 
-        Looks up router definition in the file, then composes with global prefix.
+        Priority order:
+        1. Prefix from include_router(router_name, prefix="/api")
+        2. Prefix from APIRouter(prefix="/local") + global prefix
+        3. Global prefix only
 
         Args:
             file_path: Absolute path to the file
 
         Returns:
-            Full URL prefix (e.g., '/v1/organizations') or None
+            Full URL prefix (e.g., '/api/store') or None
         """
         # Check if this is the main router file (api.py, main.py, app.py)
         filename = file_path.split('/')[-1]
@@ -297,9 +340,14 @@ class FastAPIExtractor(BaseExtractor):
         if not file_routers:
             return self.global_prefix
 
-        local_prefix = next(iter(file_routers.values()))
+        router_name = next(iter(file_routers.keys()))
+        local_prefix = file_routers[router_name]
 
-        # Compose global prefix + local prefix
+        # Priority 1: Check if this router was included with an explicit prefix
+        if router_name in self.router_include_prefixes:
+            return self.router_include_prefixes[router_name]
+
+        # Priority 2: Compose global prefix + local prefix from APIRouter(prefix=...)
         if self.global_prefix:
             # Ensure prefixes are properly formatted
             global_part = self.global_prefix.rstrip("/")
@@ -310,7 +358,7 @@ class FastAPIExtractor(BaseExtractor):
                 local_part = "/" + local_part
             return global_part + local_part
 
-        # No global prefix, just return local
+        # Priority 3: No global prefix, just return local
         return local_prefix
 
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
