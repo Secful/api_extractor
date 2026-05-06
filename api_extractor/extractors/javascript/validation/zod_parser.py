@@ -111,6 +111,12 @@ class ZodParser(BaseValidationParser):
                 )
                 schemas[var_name] = validation_schema
 
+        # Also include imported schemas (flattened)
+        for import_var, exported_schemas in self.imported_schemas.items():
+            for export_name, validation_schema in exported_schemas.items():
+                # Use the exported name as the key (e.g., CreateUserSchema)
+                schemas[export_name] = validation_schema
+
         return schemas
 
     def _load_imported_schemas(self, language: str) -> None:
@@ -260,9 +266,54 @@ class ZodParser(BaseValidationParser):
                         if schema:
                             exported[export_name] = schema
 
-        # TODO: Add ES6 export statement support
-        # export { createUser, getUser };
-        # export const createUser = { ... };
+        # ES6 export statements
+        # Pattern: export const CreateUserSchema = z.object({ ... })
+        es6_export_query = """
+        (export_statement
+          (lexical_declaration
+            (variable_declarator
+              name: (identifier) @var_name
+              value: (call_expression
+                function: (member_expression) @func))))
+        """
+
+        matches = self.parser.query(tree, es6_export_query, language)
+
+        for match in matches:
+            var_name_node = match.get("var_name")
+            func_node = match.get("func")
+
+            if not all([var_name_node, func_node]):
+                continue
+
+            func_text = self.parser.get_node_text(func_node, source_code)
+
+            # Check if it's a z.object() call
+            if not func_text.startswith("z.object"):
+                continue
+
+            var_name = self.parser.get_node_text(var_name_node, source_code)
+
+            # Find the full call_expression node
+            value_node = var_name_node.parent
+            while value_node and value_node.type != "variable_declarator":
+                value_node = value_node.parent
+
+            if value_node:
+                # Get the value (call_expression)
+                for child in value_node.children:
+                    if child.type == "call_expression":
+                        schema = self._parse_zod_object(child, source_code)
+                        if schema:
+                            validation_schema = ValidationSchema(
+                                name=var_name,
+                                schema=schema,
+                                location="body",
+                                source_line=0,
+                                parser_type="zod",
+                            )
+                            exported[var_name] = validation_schema
+                        break
 
         return exported
 

@@ -75,22 +75,62 @@ class ModuleResolver:
             if absolute_path:
                 self.resolved_paths[module_path] = absolute_path
 
-        # Query for ES6 import statements
-        import_query = """
+        # Query for ES6 named imports: import { foo, bar } from './module'
+        named_import_query = """
         (import_statement
+          (import_clause
+            (named_imports
+              (import_specifier
+                name: (identifier) @import_name)))
           source: (string) @module_path)
         """
 
-        matches = self.parser.query(tree, import_query, language)
+        matches = self.parser.query(tree, named_import_query, language)
 
         for match in matches:
+            import_name_node = match.get("import_name")
             module_path_node = match.get("module_path")
-            if not module_path_node:
+
+            if not all([import_name_node, module_path_node]):
                 continue
 
+            import_name = self.parser.get_node_text(import_name_node, source_code)
             module_path = self.parser.extract_string_value(
                 module_path_node, source_code
             )
+
+            # Store the import (map import name to module path)
+            self.imports[import_name] = module_path
+
+            # Resolve to absolute path
+            absolute_path = self._resolve_module_path(module_path, file_path)
+            if absolute_path:
+                self.resolved_paths[module_path] = absolute_path
+
+        # Query for default imports: import foo from './module'
+        default_import_query = """
+        (import_statement
+          (import_clause
+            (identifier) @import_name)
+          source: (string) @module_path)
+        """
+
+        matches = self.parser.query(tree, default_import_query, language)
+
+        for match in matches:
+            import_name_node = match.get("import_name")
+            module_path_node = match.get("module_path")
+
+            if not all([import_name_node, module_path_node]):
+                continue
+
+            import_name = self.parser.get_node_text(import_name_node, source_code)
+            module_path = self.parser.extract_string_value(
+                module_path_node, source_code
+            )
+
+            # Store the import
+            self.imports[import_name] = module_path
 
             # Resolve to absolute path
             absolute_path = self._resolve_module_path(module_path, file_path)
@@ -121,21 +161,38 @@ class ModuleResolver:
         Resolve a module path to an absolute file path.
 
         Args:
-            module_path: Module path from require/import (e.g., './validation', '../../foo')
+            module_path: Module path from require/import (e.g., './validation', '../../foo', '@/utils/foo')
             current_file: Current file path
 
         Returns:
             Absolute file path or None
         """
-        # Skip node_modules
-        if not module_path.startswith("."):
+        # Handle TypeScript path aliases (@/ -> project root)
+        if module_path.startswith("@/"):
+            # Find project root (look for app/ directory above current file)
+            current_dir = os.path.dirname(current_file)
+            while current_dir != "/":
+                # Check for Next.js app directory
+                if os.path.exists(os.path.join(current_dir, "app")):
+                    # Map @/ to project root
+                    relative_path = module_path[2:]  # Remove @/
+                    resolved = os.path.join(current_dir, relative_path)
+                    break
+                # Check for src directory (alternative Next.js structure)
+                if os.path.exists(os.path.join(current_dir, "src")):
+                    relative_path = module_path[2:]  # Remove @/
+                    resolved = os.path.join(current_dir, relative_path)
+                    break
+                current_dir = os.path.dirname(current_dir)
+            else:
+                return None
+        # Skip other node_modules
+        elif not module_path.startswith("."):
             return None
-
-        # Get current directory
-        current_dir = os.path.dirname(current_file)
-
-        # Resolve relative path
-        resolved = os.path.normpath(os.path.join(current_dir, module_path))
+        else:
+            # Get current directory for relative imports
+            current_dir = os.path.dirname(current_file)
+            resolved = os.path.normpath(os.path.join(current_dir, module_path))
 
         # Try common extensions
         for ext in [".js", ".ts", ".mjs", ""]:

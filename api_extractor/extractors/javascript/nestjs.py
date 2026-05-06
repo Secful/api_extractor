@@ -217,6 +217,12 @@ class NestJSExtractor(BaseExtractor):
                                             return_type_name, file_path, imports
                                         )
                                         if schema:
+                                            # Wrap in array if return type is array
+                                            if metadata.get("return_is_array"):
+                                                schema = Schema(
+                                                    type="array",
+                                                    items=schema.model_dump(exclude_none=True)
+                                                )
                                             metadata["response_schema"] = schema
 
                                     # Resolve request body type if needed
@@ -657,9 +663,23 @@ class NestJSExtractor(BaseExtractor):
             metadata["request_body_type_name"] = request_body_type_name
 
         # Extract return type
-        return_type_name = self._extract_return_type(method_node, source_code)
-        if return_type_name:
-            metadata["return_type_name"] = return_type_name
+        return_type_info = self._extract_return_type(method_node, source_code)
+        if return_type_info:
+            if isinstance(return_type_info, tuple):
+                return_type_name, is_array = return_type_info
+                metadata["return_type_name"] = return_type_name
+                metadata["return_is_array"] = is_array
+
+                # Extract inline object if marked
+                if return_type_name == "__inline_object__":
+                    inline_schema = self._extract_return_inline_object(method_node, source_code)
+                    if inline_schema:
+                        metadata["response_schema"] = inline_schema
+                        # Remove type name since we have inline schema
+                        del metadata["return_type_name"]
+            else:
+                # Backward compat
+                metadata["return_type_name"] = return_type_info
 
         return metadata
 
@@ -875,24 +895,141 @@ class NestJSExtractor(BaseExtractor):
                     if type_child.type == ":":
                         continue
 
+                    # Check for inline object: Promise<{ ... }>
+                    # Look for generic_type with object_type inside
+                    if type_child.type == "generic_type":
+                        # Check if this is Promise or Observable
+                        type_text = self.parser.get_node_text(type_child, source_code)
+                        if type_text.startswith("Promise<") or type_text.startswith("Observable<"):
+                            # Look for object_type inside type_arguments
+                            for generic_child in type_child.children:
+                                if generic_child.type == "type_arguments":
+                                    for arg_child in generic_child.children:
+                                        if arg_child.type == "object_type":
+                                            # Inline object - return special marker
+                                            return ("__inline_object__", False)
+                                        # Check for array of inline objects: { ... }[]
+                                        elif arg_child.type == "array_type":
+                                            for array_child in arg_child.children:
+                                                if array_child.type == "object_type":
+                                                    return ("__inline_object__", True)
+
                     # Get the type text
                     type_text = self.parser.get_node_text(type_child, source_code)
 
                     # Handle Promise<Type>
                     promise_match = re.match(r"Promise<([^>]+)>", type_text)
                     if promise_match:
-                        return promise_match.group(1)
+                        inner_type = promise_match.group(1)
+                        # Store metadata about array/union modifiers
+                        return self._parse_return_type_modifiers(inner_type)
 
                     # Handle Observable<Type>
                     observable_match = re.match(r"Observable<([^>]+)>", type_text)
                     if observable_match:
-                        return observable_match.group(1)
+                        inner_type = observable_match.group(1)
+                        return self._parse_return_type_modifiers(inner_type)
 
                     # Return direct type (skip void)
                     if type_text != "void":
-                        return type_text
+                        return self._parse_return_type_modifiers(type_text)
 
         return None
+
+    def _parse_return_type_modifiers(self, type_text: str) -> Tuple[str, bool]:
+        """
+        Parse return type and extract base type, detecting array/union modifiers.
+        Returns (base_type_name, is_array).
+
+        Examples:
+        - "PageLayoutDTO[]" -> ("PageLayoutDTO", True)
+        - "PageLayoutDTO | null" -> ("PageLayoutDTO", False)
+        - "PageLayoutDTO" -> ("PageLayoutDTO", False)
+
+        Args:
+            type_text: Type string possibly with modifiers
+
+        Returns:
+            Tuple of (base_type_name, is_array)
+        """
+        is_array = "[]" in type_text
+
+        # Strip array brackets
+        type_text = type_text.replace("[]", "").strip()
+
+        # Handle union types (Type | null, Type | undefined)
+        if "|" in type_text:
+            parts = [p.strip() for p in type_text.split("|")]
+            # Return first non-null/undefined type
+            for part in parts:
+                if part not in ("null", "undefined"):
+                    return (part, is_array)
+
+        return (type_text, is_array)
+
+    def _extract_return_inline_object(
+        self, method_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Extract inline object type from return type annotation.
+        Pattern: ): Promise<{ success: boolean }> {
+
+        Args:
+            method_node: Method node
+            source_code: Source code bytes
+
+        Returns:
+            Schema or None
+        """
+        # Find type_annotation
+        for child in method_node.children:
+            if child.type == "type_annotation":
+                for type_child in child.children:
+                    if type_child.type == "generic_type":
+                        # Find type_arguments
+                        for generic_child in type_child.children:
+                            if generic_child.type == "type_arguments":
+                                # Find object_type
+                                for arg_child in generic_child.children:
+                                    if arg_child.type == "object_type":
+                                        return self._extract_inline_object_type_direct(arg_child, source_code)
+
+        return None
+
+    def _extract_inline_object_type_direct(
+        self, object_type_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Extract schema from object_type node.
+
+        Args:
+            object_type_node: Object type AST node
+            source_code: Source code bytes
+
+        Returns:
+            Schema or None
+        """
+        properties = {}
+        required = []
+
+        # Parse property signatures
+        for child in object_type_node.children:
+            if child.type == "property_signature":
+                prop_info = self._parse_property_signature(child, source_code)
+                if prop_info:
+                    name, prop_schema, is_required = prop_info
+                    properties[name] = prop_schema
+                    if is_required:
+                        required.append(name)
+
+        if not properties:
+            return None
+
+        return Schema(
+            type="object",
+            properties=properties,
+            required=required if required else None
+        )
 
     def _extract_imports(self, tree, source_code: bytes) -> Dict[str, str]:
         """
@@ -979,7 +1116,8 @@ class NestJSExtractor(BaseExtractor):
     ) -> Optional[str]:
         """
         Resolve import path to absolute file path.
-        Tries tsconfig aliases first, then falls back to relative imports.
+        Tries tsconfig aliases first, then falls back to relative imports,
+        then project-relative paths (src/...).
 
         Args:
             import_path: Import path from import statement
@@ -1008,6 +1146,50 @@ class NestJSExtractor(BaseExtractor):
             # Try as-is
             if os.path.exists(resolved):
                 return resolved
+
+        # Handle project-relative imports (src/..., engine/..., etc.)
+        # Find project root by walking up from current file
+        if not import_path.startswith(".") and not import_path.startswith("@"):
+            project_root = self._find_project_root(current_file)
+            if project_root:
+                resolved = os.path.join(project_root, import_path)
+                # Try with .ts extension
+                if os.path.exists(resolved + ".ts"):
+                    return resolved + ".ts"
+                # Try with /index.ts
+                if os.path.exists(os.path.join(resolved, "index.ts")):
+                    return os.path.join(resolved, "index.ts")
+
+        return None
+
+    def _find_project_root(self, file_path: str) -> Optional[str]:
+        """
+        Find project root by looking for package.json, tsconfig.json, or src/ directory.
+
+        Args:
+            file_path: Current file path
+
+        Returns:
+            Project root directory or None
+        """
+        current_dir = os.path.dirname(file_path)
+
+        while current_dir != "/":
+            # Check for common project markers
+            if os.path.exists(os.path.join(current_dir, "package.json")):
+                return current_dir
+            if os.path.exists(os.path.join(current_dir, "tsconfig.json")):
+                # Check if src/ exists one level down (monorepo structure)
+                if os.path.exists(os.path.join(current_dir, "src")):
+                    return current_dir
+            # Check if we're in a packages/<name>/ structure
+            if os.path.basename(os.path.dirname(current_dir)) == "packages":
+                parent_package = os.path.dirname(os.path.dirname(current_dir))
+                if os.path.exists(os.path.join(parent_package, "package.json")):
+                    # Monorepo root found, use current package as root
+                    return current_dir
+
+            current_dir = os.path.dirname(current_dir)
 
         return None
 

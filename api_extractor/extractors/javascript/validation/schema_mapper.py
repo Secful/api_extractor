@@ -147,9 +147,9 @@ class SchemaMapper:
             elif method_name == "optional":
                 is_required = False
             elif method_name == "nullable":
-                # In OpenAPI 3.1, use type: [string, null]
-                current_type = schema_dict.get("type", "string")
-                schema_dict["type"] = [current_type, "null"]
+                # OpenAPI 3.0 nullable (keep type as string, properties dict can handle it)
+                # Note: Converting to list breaks Pydantic Schema model validation
+                schema_dict["nullable"] = True
             elif method_name == "email":
                 schema_dict["format"] = "email"
             elif method_name == "url":

@@ -19,6 +19,13 @@ from api_extractor.core.models import (
     Route,
     Schema,
 )
+from api_extractor.extractors.javascript.validation import (
+    ZodParser,
+    ValidationSchema,
+)
+from api_extractor.extractors.javascript.typescript_type_resolver import (
+    TypeScriptTypeResolver,
+)
 
 
 class NextJSExtractor(BaseExtractor):
@@ -31,6 +38,9 @@ class NextJSExtractor(BaseExtractor):
         """Initialize Next.js extractor."""
         super().__init__(FrameworkType.NEXTJS)
         self.router_type: str | None = None
+        self.validation_schemas: Dict[str, ValidationSchema] = {}
+        self.zod_parser: Optional[ZodParser] = None
+        self.type_resolver: Optional[TypeScriptTypeResolver] = None
 
     def get_file_extensions(self) -> List[str]:
         """Get JavaScript/TypeScript file extensions."""
@@ -71,6 +81,9 @@ class NextJSExtractor(BaseExtractor):
         interfaces = {}
         if is_typescript:
             interfaces = self._find_interfaces(tree, source_code)
+
+        # Extract validation schemas (Zod)
+        self._extract_validation_schemas(tree, source_code, language, file_path)
 
         # Extract routes based on router type
         if router_type == "app":
@@ -184,6 +197,18 @@ class NextJSExtractor(BaseExtractor):
             metadata = {}
             if params_node and language == "typescript":
                 metadata = self._extract_app_router_metadata(params_node, source_code, interfaces)
+
+            # Detect Zod schema usage in handler
+            if method in [HTTPMethod.POST, HTTPMethod.PUT, HTTPMethod.PATCH]:
+                request_schema = self._detect_zod_schema_in_handler(match, source_code, tree, language)
+                if request_schema:
+                    metadata["request_body"] = request_schema
+
+            # Extract TypeScript response type from NextResponse.json<T>()
+            if language == "typescript":
+                response_schema = self._extract_response_type_from_handler(match, source_code, file_path)
+                if response_schema:
+                    metadata["response_schema"] = response_schema
 
             location = self.parser.get_node_location(func_name_node)
 
@@ -706,6 +731,173 @@ class NextJSExtractor(BaseExtractor):
         else:
             return "string"
 
+    def _extract_response_type_from_handler(
+        self, match: Dict[str, Node], source_code: bytes, file_path: str
+    ) -> Optional[Schema]:
+        """
+        Extract TypeScript response type from handler.
+
+        Looks for patterns like:
+        - return NextResponse.json<ResponseType>(...)
+        - const response = NextResponse.json<ResponseType>(...)
+
+        Args:
+            match: Query match containing handler node
+            source_code: Source code bytes
+            file_path: File path
+
+        Returns:
+            Schema if found, None otherwise
+        """
+        # Initialize type resolver if needed
+        if not self.type_resolver:
+            self.type_resolver = TypeScriptTypeResolver(self.parser)
+
+        # Get full export statement node
+        export_node = None
+        for key, node in match.items():
+            if node and hasattr(node, 'parent'):
+                current = node
+                while current and current.type != 'export_statement':
+                    current = current.parent
+                if current:
+                    export_node = current
+                    break
+
+        if not export_node:
+            return None
+
+        # Find all call_expression nodes in the handler
+        def find_call_expressions(node, results):
+            if node.type == "call_expression":
+                results.append(node)
+            for child in node.children:
+                find_call_expressions(child, results)
+
+        call_expressions = []
+        find_call_expressions(export_node, call_expressions)
+
+        # Check each call for NextResponse.json<T> pattern
+        for call_node in call_expressions:
+            schema = self.type_resolver.extract_response_type_from_generic(
+                call_node, source_code, file_path
+            )
+            if schema:
+                return schema
+
+        return None
+
+    def _detect_zod_schema_in_handler(
+        self, match: Dict[str, Node], source_code: bytes, tree, language: str
+    ) -> Optional[Schema]:
+        """
+        Detect Zod schema usage in handler body.
+
+        Looks for patterns like:
+        - schema.parse(body)
+        - schema.safeParse(body)
+        - const result = CreateUserSchema.safeParse(body)
+
+        Args:
+            match: Query match containing handler node
+            source_code: Source code bytes
+            tree: Syntax tree
+            language: Language
+
+        Returns:
+            Schema if found, None otherwise
+        """
+        # Get full export statement node
+        export_node = None
+        for key, node in match.items():
+            if node and hasattr(node, 'parent'):
+                current = node
+                while current and current.type != 'export_statement':
+                    current = current.parent
+                if current:
+                    export_node = current
+                    break
+
+        if not export_node:
+            return None
+
+        # Search for .safeParse() or .parse() calls
+        text = self.parser.get_node_text(export_node, source_code)
+
+        # Pattern: SchemaName.safeParse() or SchemaName.parse()
+        parse_pattern = r'(\w+)\.(safeParse|parse)\s*\('
+        matches = re.finditer(parse_pattern, text)
+
+        for parse_match in matches:
+            schema_name = parse_match.group(1)
+
+            # Check if schema exists in our extracted schemas
+            if schema_name in self.validation_schemas:
+                validation_schema = self.validation_schemas[schema_name]
+                return validation_schema.schema
+
+        return None
+
+    def _extract_validation_schemas(
+        self, tree, source_code: bytes, language: str, file_path: str
+    ) -> None:
+        """
+        Extract Zod validation schemas from file.
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+            language: Language (javascript or typescript)
+            file_path: Path to file being parsed
+        """
+        # Initialize Zod parser if needed
+        if not self.zod_parser:
+            self.zod_parser = ZodParser(self.parser)
+
+        # Extract schemas (this includes both local z.object() and imported schemas)
+        zod_schemas = self.zod_parser.extract_schemas_from_file(
+            tree, source_code, language, file_path
+        )
+        self.validation_schemas.update(zod_schemas)
+
+    def _has_import(
+        self, tree, source_code: bytes, language: str, module_names: List[str]
+    ) -> bool:
+        """
+        Check if file imports any of the specified modules.
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+            language: Language
+            module_names: List of module names to check for
+
+        Returns:
+            True if any module is imported
+        """
+        # Query for import statements
+        import_query = """
+        (import_statement
+          source: (string) @import_source)
+        """
+
+        matches = self.parser.query(tree, import_query, language)
+
+        for match in matches:
+            import_source_node = match.get("import_source")
+            if not import_source_node:
+                continue
+
+            import_source = self.parser.get_node_text(import_source_node, source_code)
+            # Remove quotes
+            import_source = import_source.strip('"\'')
+
+            for module_name in module_names:
+                if module_name in import_source:
+                    return True
+
+        return False
+
     def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
         """
         Convert a Route to one or more Endpoint objects.
@@ -722,7 +914,7 @@ class NextJSExtractor(BaseExtractor):
             # Parse path parameters
             parameters = self._extract_path_parameters(route.raw_path)
 
-            # Get request body from metadata
+            # Get request body from metadata (could be from Zod schema)
             request_body = route.metadata.get("request_body")
 
             # Get response schema from metadata

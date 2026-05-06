@@ -40,3 +40,9 @@
 [submodule "tests/fixtures/real-world/python/flask/rest-apis-flask-python"]
 	path = tests/fixtures/real-world/python/flask/rest-apis-flask-python
 	url = https://github.com/tecladocode/rest-apis-flask-python.git
+[submodule "tests/fixtures/real-world/javascript/nextjs/inbox-zero"]
+	path = tests/fixtures/real-world/javascript/nextjs/inbox-zero
+	url = https://github.com/elie222/inbox-zero.git
+[submodule "tests/fixtures/real-world/javascript/nestjs/twenty"]
+	path = tests/fixtures/real-world/javascript/nestjs/twenty
+	url = https://github.com/twentyhq/twenty.git
