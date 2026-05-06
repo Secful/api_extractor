@@ -129,6 +129,7 @@ class ExtractionService:
             all_endpoints = []
             all_errors = []
             all_warnings = []
+            extractors_used = []
 
             for fw in detected_frameworks:
                 extractor = get_extractor(fw)
@@ -147,6 +148,7 @@ class ExtractionService:
 
                 all_errors.extend(extraction_result.errors)
                 all_warnings.extend(extraction_result.warnings)
+                extractors_used.append(extractor)
 
             # Check if we found any endpoints
             if not all_endpoints:
@@ -173,6 +175,9 @@ class ExtractionService:
                 "frameworks_used": [f.value for f in detected_frameworks],
             }
 
+            # Build sniff metadata
+            result.sniff_metadata = self._build_sniff_metadata(detected_frameworks, extractors_used)
+
             return result
 
         except Exception as e:
@@ -187,3 +192,41 @@ class ExtractionService:
                     handler.cleanup()
                 except Exception as e:
                     logger.warning(f"Cleanup failed: {e}")
+
+    def _build_sniff_metadata(self, frameworks: List[FrameworkType], extractors: List) -> Optional:
+        """
+        Build sniff metadata from detected frameworks and extractors.
+
+        Args:
+            frameworks: List of detected frameworks
+            extractors: List of extractor instances used
+
+        Returns:
+            SniffMetadata object or None if no frameworks detected
+        """
+        from api_extractor.core.models import SniffMetadata, ValidationLibrary
+        from api_extractor.core.detector import FrameworkDetector
+
+        if not frameworks:
+            return None
+
+        detector = FrameworkDetector()
+
+        # Determine primary language from first framework
+        language = detector.get_language_for_framework(frameworks[0])
+        if not language:
+            return None
+
+        # Aggregate validation libraries from all extractors
+        validation_libs = []
+        for extractor in extractors:
+            validation_libs.extend(extractor.get_validation_libraries())
+
+        # Deduplicate
+        validation_libs = list(set(validation_libs))
+
+        return SniffMetadata(
+            language=language,
+            frameworks=frameworks,
+            validation_libraries=validation_libs,
+        )

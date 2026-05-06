@@ -98,6 +98,15 @@ def extract(
             for fw in result.frameworks_detected:
                 click.echo(f"  ✓ Found: {fw.value}")
 
+        # Show sniff metadata
+        if verbose and result.sniff_metadata:
+            click.echo("\nDetected:")
+            click.echo(f"  Language: {result.sniff_metadata.language.value}")
+            click.echo(f"  Frameworks: {', '.join(f.value for f in result.sniff_metadata.frameworks)}")
+            if result.sniff_metadata.validation_libraries:
+                libs = ', '.join(v.value for v in result.sniff_metadata.validation_libraries)
+                click.echo(f"  Validation: {libs}")
+
         # Show endpoint count
         if verbose:
             click.echo(f"\nExtracted {result.endpoints_count} endpoints")

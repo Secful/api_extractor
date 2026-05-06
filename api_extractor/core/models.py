@@ -20,6 +20,43 @@ class FrameworkType(str, Enum):
     GIN = "gin"
 
 
+class LanguageType(str, Enum):
+    """Supported programming languages."""
+
+    PYTHON = "python"
+    JAVASCRIPT = "javascript"
+    TYPESCRIPT = "typescript"
+    JAVA = "java"
+    CSHARP = "csharp"
+    GO = "go"
+
+
+class ValidationLibrary(str, Enum):
+    """Validation libraries detected."""
+
+    # Python
+    PYDANTIC = "pydantic"
+    MARSHMALLOW = "marshmallow"
+
+    # JavaScript/TypeScript
+    JOI = "joi"
+    ZOD = "zod"
+    AJV = "ajv"
+
+    # Java
+    JSR380 = "jsr380"
+    HIBERNATE_VALIDATOR = "hibernate_validator"
+    JACKSON = "jackson"
+
+    # C#
+    DATA_ANNOTATIONS = "data_annotations"
+    FLUENT_VALIDATION = "fluent_validation"
+
+    # Go
+    GO_PLAYGROUND_VALIDATOR = "go_playground_validator"
+    GIN_BINDING = "gin_binding"
+
+
 class ParameterLocation(str, Enum):
     """Parameter location in request."""
 
@@ -109,6 +146,14 @@ class Route(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class SniffMetadata(BaseModel):
+    """Metadata about detected language, framework, and validation libraries."""
+
+    language: LanguageType
+    frameworks: List[FrameworkType] = Field(default_factory=list)
+    validation_libraries: List[ValidationLibrary] = Field(default_factory=list)
+
+
 class ExtractionResult(BaseModel):
     """Result of API extraction."""
 
@@ -117,3 +162,4 @@ class ExtractionResult(BaseModel):
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     frameworks_detected: List[FrameworkType] = Field(default_factory=list)
+    sniff_metadata: Optional[SniffMetadata] = None

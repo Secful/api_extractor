@@ -1,0 +1,374 @@
+openapi: 3.1.0
+info:
+  title: API Extractor Lambda Function
+  version: 1.0.0
+  description: |
+    AWS Lambda function that extracts REST API definitions from source code
+    mounted via S3 Files and generates OpenAPI specifications.
+
+    The function expects source code to be available at /mnt/s3/lambda/{folder}
+    and returns a generated OpenAPI 3.1.0 specification.
+
+servers:
+  - url: https://{lambda-url}
+    description: Lambda Function URL
+    variables:
+      lambda-url:
+        default: your-lambda-function-url.lambda-url.region.on.aws
+        description: Your Lambda Function URL endpoint
+
+paths:
+  /:
+    post:
+      summary: Extract API from source code
+      description: |
+        Analyzes source code in the specified S3-mounted folder and generates
+        an OpenAPI specification. Supports multiple frameworks including FastAPI,
+        Flask, Express, Spring Boot, and more.
+      operationId: extractAPI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - folder
+              properties:
+                folder:
+                  type: string
+                  description: Folder name in mounted S3 filesystem (under /lambda/ prefix)
+                  example: my-fastapi-project
+                title:
+                  type: string
+                  description: API title for generated OpenAPI spec
+                  default: Extracted API
+                  example: My REST API
+                version:
+                  type: string
+                  description: API version for generated OpenAPI spec
+                  default: 1.0.0
+                  example: 2.1.0
+                description:
+                  type: string
+                  description: API description for generated OpenAPI spec
+                  example: My company's REST API for product management
+            examples:
+              minimal:
+                summary: Minimal request
+                value:
+                  folder: my-project
+              complete:
+                summary: Complete request with metadata
+                value:
+                  folder: my-fastapi-app
+                  title: Product API
+                  version: 2.0.0
+                  description: Product management REST API
+      responses:
+        '200':
+          description: Successfully extracted API specification
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                default: application/json
+            X-Endpoints-Count:
+              schema:
+                type: string
+              description: Number of endpoints found
+              example: "23"
+            X-Frameworks:
+              schema:
+                type: string
+              description: Comma-separated list of detected frameworks
+              example: fastapi,flask
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ExtractionSuccessResponse'
+                  - $ref: '#/components/schemas/NoEndpointsResponse'
+              examples:
+                success:
+                  summary: Successful extraction
+                  value:
+                    openapi_spec:
+                      openapi: 3.1.0
+                      info:
+                        title: My API
+                        version: 1.0.0
+                      paths:
+                        /users:
+                          get:
+                            summary: List users
+                            responses:
+                              '200':
+                                description: Success
+                        /users/{id}:
+                          get:
+                            summary: Get user by ID
+                            parameters:
+                              - name: id
+                                in: path
+                                required: true
+                                schema:
+                                  type: integer
+                            responses:
+                              '200':
+                                description: Success
+                    sniff_metadata:
+                      language: python
+                      frameworks:
+                        - fastapi
+                      validation_libraries:
+                        - pydantic
+                no_endpoints:
+                  summary: No endpoints found
+                  value:
+                    error: No API endpoints found in the specified folder
+                    endpoints_count: 0
+                    frameworks_detected: []
+                    warnings:
+                      - No route definitions found
+        '400':
+          description: Bad request - invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missing_folder:
+                  summary: Missing required field
+                  value:
+                    error: "Missing required field: 'folder'"
+                invalid_json:
+                  summary: Invalid JSON
+                  value:
+                    error: "Invalid JSON: Expecting value: line 1 column 1 (char 0)"
+                not_directory:
+                  summary: Path is not a directory
+                  value:
+                    error: "Path is not a directory: my-file.txt"
+        '404':
+          description: Folder not found in S3 mount
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Folder not found: nonexistent-project"
+        '422':
+          description: Extraction failed - code could not be analyzed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractionFailedResponse'
+              example:
+                error: Extraction failed
+                errors:
+                  - "Unable to detect any supported frameworks"
+                  - "No Python dependency files found"
+                warnings:
+                  - "Use manual framework specification if detection fails"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                mount_error:
+                  summary: S3 filesystem not mounted
+                  value:
+                    error: "S3 filesystem not mounted at /mnt/s3"
+                internal_error:
+                  summary: Unexpected error
+                  value:
+                    error: "Internal error: division by zero"
+
+components:
+  schemas:
+    ExtractionSuccessResponse:
+      type: object
+      description: Successful extraction response with OpenAPI spec and sniff metadata
+      required:
+        - openapi_spec
+      properties:
+        openapi_spec:
+          $ref: '#/components/schemas/OpenAPISpecification'
+        sniff_metadata:
+          $ref: '#/components/schemas/SniffMetadata'
+
+    OpenAPISpecification:
+      type: object
+      description: OpenAPI 3.1.0 specification generated from source code
+      required:
+        - openapi
+        - info
+      properties:
+        openapi:
+          type: string
+          example: 3.1.0
+        info:
+          type: object
+          required:
+            - title
+            - version
+          properties:
+            title:
+              type: string
+            version:
+              type: string
+            description:
+              type: string
+        servers:
+          type: array
+          items:
+            type: object
+        paths:
+          type: object
+          description: API endpoints extracted from source code
+        components:
+          type: object
+        tags:
+          type: array
+          items:
+            type: object
+
+    SniffMetadata:
+      type: object
+      description: Detected language, frameworks, and validation libraries
+      required:
+        - language
+        - frameworks
+        - validation_libraries
+      properties:
+        language:
+          type: string
+          enum:
+            - python
+            - javascript
+            - typescript
+            - java
+            - csharp
+            - go
+          example: python
+        frameworks:
+          type: array
+          items:
+            type: string
+            enum:
+              - fastapi
+              - flask
+              - django-rest
+              - express
+              - nestjs
+              - fastify
+              - spring-boot
+              - aspnet-core
+              - gin
+              - nextjs
+          example:
+            - fastapi
+        validation_libraries:
+          type: array
+          items:
+            type: string
+            enum:
+              - pydantic
+              - marshmallow
+              - joi
+              - zod
+              - ajv
+              - jsr380
+              - hibernate_validator
+              - jackson
+              - data_annotations
+              - fluent_validation
+              - go_playground_validator
+              - gin_binding
+          example:
+            - pydantic
+
+    NoEndpointsResponse:
+      type: object
+      description: Response when no API endpoints are found
+      required:
+        - error
+        - endpoints_count
+        - frameworks_detected
+      properties:
+        error:
+          type: string
+          example: No API endpoints found in the specified folder
+        endpoints_count:
+          type: integer
+          example: 0
+        frameworks_detected:
+          type: array
+          items:
+            type: string
+          example: []
+        warnings:
+          type: array
+          items:
+            type: string
+
+    ErrorResponse:
+      type: object
+      description: Error response with details
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+
+    ExtractionFailedResponse:
+      type: object
+      description: Response when extraction fails
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: Extraction failed
+        errors:
+          type: array
+          items:
+            type: string
+          description: List of errors encountered during extraction
+        warnings:
+          type: array
+          items:
+            type: string
+          description: List of warnings encountered during extraction
+
+  examples:
+    FastAPIRequest:
+      summary: Extract FastAPI application
+      value:
+        folder: fastapi-demo
+        title: FastAPI Demo API
+        version: 1.0.0
+        description: Demo API built with FastAPI
+
+    FlaskRequest:
+      summary: Extract Flask application
+      value:
+        folder: flask-app
+        title: Flask REST API
+        version: 2.3.0
+
+    ExpressRequest:
+      summary: Extract Express.js application
+      value:
+        folder: express-server
+        title: Express API
+        version: 1.5.0
+        description: Node.js Express REST API
+
+tags:
+  - name: extraction
+    description: API extraction operations

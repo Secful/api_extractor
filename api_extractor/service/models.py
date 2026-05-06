@@ -3,7 +3,7 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 
-from api_extractor.core.models import FrameworkType
+from api_extractor.core.models import FrameworkType, SniffMetadata
 from api_extractor.openapi.models import OpenAPISpec
 
 
@@ -17,6 +17,7 @@ class ExtractionServiceResult(BaseModel):
     errors: List[str] = []
     warnings: List[str] = []
     metadata: Dict[str, Any] = {}
+    sniff_metadata: Optional[SniffMetadata] = None
 
     class Config:
         arbitrary_types_allowed = True

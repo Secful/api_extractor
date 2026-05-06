@@ -1,15 +1,17 @@
 #!/bin/bash
 set -e
 
-source lambda-config.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/config.sh"
 
-echo "Testing deployed Lambda function..."
+echo "Testing deployed Lambda function in region: $AWS_REGION"
 
 FOLDER_NAME=${1:-"test-project"}
 
 echo "Invoking function for folder: $FOLDER_NAME"
 
 aws lambda invoke \
+    --region "$AWS_REGION" \
     --function-name "$FUNCTION_NAME" \
     --cli-binary-format raw-in-base64-out \
     --payload "{\"folder\": \"$FOLDER_NAME\"}" \

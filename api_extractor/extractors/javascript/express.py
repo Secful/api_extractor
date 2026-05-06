@@ -42,6 +42,25 @@ class ExpressExtractor(BaseExtractor):
         """Get JavaScript file extensions."""
         return [".js", ".ts"]
 
+    def get_validation_libraries(self) -> List[ValidationLibrary]:
+        """Detect validation libraries used in Express app."""
+        from api_extractor.core.models import ValidationLibrary
+        libraries = []
+
+        # Check if validation schemas were detected
+        if self.validation_schemas:
+            # Check which parsers were used based on schema parser_type
+            parser_types = {schema.parser_type for schema in self.validation_schemas.values() if schema.parser_type}
+
+            if 'joi' in parser_types:
+                libraries.append(ValidationLibrary.JOI)
+            if 'zod' in parser_types:
+                libraries.append(ValidationLibrary.ZOD)
+            if 'json_schema' in parser_types:
+                libraries.append(ValidationLibrary.AJV)
+
+        return libraries
+
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
         """
         Extract routes from an Express file.

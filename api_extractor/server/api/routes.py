@@ -130,6 +130,11 @@ def analyze_codebase(request: AnalyzeRequest) -> AnalyzeResponse:
         if result.openapi_spec:
             openapi_dict = result.openapi_spec.model_dump(exclude_none=True)
 
+        # Convert SniffMetadata to dict for JSON response
+        sniff_dict = None
+        if result.sniff_metadata:
+            sniff_dict = result.sniff_metadata.model_dump()
+
         # Build response
         response = AnalyzeResponse(
             success=result.success,
@@ -139,6 +144,7 @@ def analyze_codebase(request: AnalyzeRequest) -> AnalyzeResponse:
             errors=result.errors,
             warnings=result.warnings,
             metadata=result.metadata,
+            sniff_metadata=sniff_dict,
         )
 
         if not result.success:

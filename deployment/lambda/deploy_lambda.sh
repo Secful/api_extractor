@@ -2,9 +2,10 @@
 set -e
 
 # Load configuration
-source lambda-config.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/config.sh"
 
-echo "Deploying Lambda function: $FUNCTION_NAME"
+echo "Deploying Lambda function: $FUNCTION_NAME in region: $AWS_REGION"
 
 # Create IAM role if it doesn't exist
 ROLE_NAME="${FUNCTION_NAME}-role"
@@ -86,7 +87,7 @@ fi
 
 echo "Using IAM role: $ROLE_ARN"
 
-# Get VPC configuration from lambda-config.sh
+# Get VPC configuration from config.sh
 if [ -z "$SUBNET_IDS" ] || [ -z "$SECURITY_GROUP_ID" ]; then
     echo "ERROR: VPC configuration not found. Run 'bash scripts/setup_vpc.sh' first."
     exit 1
@@ -96,36 +97,51 @@ fi
 SUBNET_IDS_COMMA=$(echo "$SUBNET_IDS" | tr ' ' ',')
 
 # Check if function exists
-FUNCTION_EXISTS=$(aws lambda get-function --function-name "$FUNCTION_NAME" 2>/dev/null || echo "")
+FUNCTION_EXISTS=$(aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" 2>/dev/null || echo "")
+
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ZIP_FILE="$PROJECT_ROOT/build/lambda-function.zip"
+
+if [ ! -f "$ZIP_FILE" ]; then
+    echo "ERROR: Lambda package not found at $ZIP_FILE"
+    echo "Run 'bash deployment/lambda/build_lambda.sh' first"
+    exit 1
+fi
 
 if [ -z "$FUNCTION_EXISTS" ]; then
     echo "Creating Lambda function..."
     aws lambda create-function \
+        --region "$AWS_REGION" \
         --function-name "$FUNCTION_NAME" \
         --runtime python3.11 \
         --architectures arm64 \
         --role "$ROLE_ARN" \
         --handler lambda_handler.lambda_handler \
-        --zip-file fileb://build/lambda-function.zip \
+        --zip-file "fileb://$ZIP_FILE" \
         --timeout "$LAMBDA_TIMEOUT" \
         --memory-size "$LAMBDA_MEMORY" \
         --vpc-config "SubnetIds=$SUBNET_IDS_COMMA,SecurityGroupIds=$SECURITY_GROUP_ID" \
-        --environment "Variables={S3_MOUNT_PATH=/mnt/s3,LOG_LEVEL=INFO,S3_BUCKET_NAME=$S3_BUCKET_NAME}" \
+        --environment "Variables={S3_MOUNT_PATH=/mnt/s3files,LOG_LEVEL=INFO,S3_BUCKET_NAME=$S3_BUCKET_NAME}" \
         --description "API Extractor - Extract OpenAPI specs from source code"
 else
     echo "Updating Lambda function code..."
     aws lambda update-function-code \
+        --region "$AWS_REGION" \
         --function-name "$FUNCTION_NAME" \
-        --zip-file fileb://build/lambda-function.zip
+        --zip-file "fileb://$ZIP_FILE"
+
+    echo "Waiting for code update to complete..."
+    aws lambda wait function-updated --region "$AWS_REGION" --function-name "$FUNCTION_NAME"
 
     echo "Updating Lambda function configuration..."
     aws lambda update-function-configuration \
+        --region "$AWS_REGION" \
         --function-name "$FUNCTION_NAME" \
         --timeout "$LAMBDA_TIMEOUT" \
         --memory-size "$LAMBDA_MEMORY" \
         --vpc-config "SubnetIds=$SUBNET_IDS_COMMA,SecurityGroupIds=$SECURITY_GROUP_ID" \
-        --environment "Variables={S3_MOUNT_PATH=/mnt/s3,LOG_LEVEL=INFO,S3_BUCKET_NAME=$S3_BUCKET_NAME}"
+        --environment "Variables={S3_MOUNT_PATH=/mnt/s3files,LOG_LEVEL=INFO,S3_BUCKET_NAME=$S3_BUCKET_NAME}"
 fi
 
 echo "Lambda function deployed successfully!"
-aws lambda get-function --function-name "$FUNCTION_NAME" --query 'Configuration.[FunctionName,State,LastModified]' --output table
+aws lambda get-function --region "$AWS_REGION" --function-name "$FUNCTION_NAME" --query 'Configuration.[FunctionName,State,LastModified]' --output table

@@ -45,8 +45,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return error_response(400, "Missing required field: 'folder'")
 
         # Construct path from mounted S3 filesystem
-        # All project folders are under /lambda/ prefix in S3
-        code_path = Path(S3_MOUNT_PATH) / "lambda" / folder
+        # S3 Files access point is configured with /lambda/ as root, so folders are directly under mount
+        code_path = Path(S3_MOUNT_PATH) / folder
         logger.info(f"Processing: {code_path}")
 
         # Verify mount point exists
@@ -106,6 +106,16 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             f"from frameworks: {', '.join(f.value for f in result.frameworks_detected)}"
         )
 
+        # Build response body with OpenAPI spec and sniff metadata
+        response_body: dict[str, Any] = {"openapi_spec": openapi_spec}
+
+        if result.sniff_metadata:
+            response_body["sniff_metadata"] = {
+                "language": result.sniff_metadata.language.value,
+                "frameworks": [f.value for f in result.sniff_metadata.frameworks],
+                "validation_libraries": [v.value for v in result.sniff_metadata.validation_libraries],
+            }
+
         return {
             "statusCode": 200,
             "headers": {
@@ -113,7 +123,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "X-Endpoints-Count": str(result.endpoints_count),
                 "X-Frameworks": ",".join(f.value for f in result.frameworks_detected),
             },
-            "body": json.dumps(openapi_spec),
+            "body": json.dumps(response_body),
         }
 
     except json.JSONDecodeError as e:

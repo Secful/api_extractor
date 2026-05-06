@@ -33,6 +33,7 @@ class AnalyzeResponse(BaseModel):
     errors: List[str] = Field([], description="Errors encountered during extraction")
     warnings: List[str] = Field([], description="Warnings encountered during extraction")
     metadata: Dict[str, Any] = Field({}, description="Additional metadata")
+    sniff_metadata: Optional[Dict[str, Any]] = Field(None, description="Detected language, frameworks, and validation libraries")
 
     class Config:
         json_schema_extra = {

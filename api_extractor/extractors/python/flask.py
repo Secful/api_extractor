@@ -39,6 +39,14 @@ class FlaskExtractor(BaseExtractor):
         """Get Python file extensions."""
         return [".py"]
 
+    def get_validation_libraries(self) -> List[ValidationLibrary]:
+        """Detect validation libraries used in Flask app."""
+        from api_extractor.core.models import ValidationLibrary
+        libraries = []
+        if self.marshmallow_schemas:
+            libraries.append(ValidationLibrary.MARSHMALLOW)
+        return libraries
+
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
         """
         Extract routes from a Flask file.

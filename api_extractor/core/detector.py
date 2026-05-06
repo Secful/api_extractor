@@ -5,7 +5,7 @@ import os
 import re
 from pathlib import Path
 from typing import List, Optional, Set
-from api_extractor.core.models import FrameworkType
+from api_extractor.core.models import FrameworkType, LanguageType
 
 
 class FrameworkDetector:
@@ -114,9 +114,35 @@ class FrameworkDetector:
         ],
     }
 
+    # Framework to language mapping
+    FRAMEWORK_LANGUAGE_MAP = {
+        FrameworkType.FASTAPI: LanguageType.PYTHON,
+        FrameworkType.FLASK: LanguageType.PYTHON,
+        FrameworkType.DJANGO_REST: LanguageType.PYTHON,
+        FrameworkType.EXPRESS: LanguageType.JAVASCRIPT,
+        FrameworkType.NESTJS: LanguageType.TYPESCRIPT,
+        FrameworkType.FASTIFY: LanguageType.JAVASCRIPT,
+        FrameworkType.SPRING_BOOT: LanguageType.JAVA,
+        FrameworkType.NEXTJS: LanguageType.TYPESCRIPT,
+        FrameworkType.ASPNET_CORE: LanguageType.CSHARP,
+        FrameworkType.GIN: LanguageType.GO,
+    }
+
     def __init__(self) -> None:
         """Initialize detector."""
         pass
+
+    def get_language_for_framework(self, framework: FrameworkType) -> Optional[LanguageType]:
+        """
+        Get programming language for a framework.
+
+        Args:
+            framework: Framework type
+
+        Returns:
+            Language type, or None if not mapped
+        """
+        return self.FRAMEWORK_LANGUAGE_MAP.get(framework)
 
     def detect(self, path: str) -> Optional[List[FrameworkType]]:
         """

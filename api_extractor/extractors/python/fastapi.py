@@ -15,6 +15,7 @@ from api_extractor.core.models import (
     Endpoint,
     Response,
     ParameterLocation,
+    ValidationLibrary,
 )
 
 
@@ -49,6 +50,11 @@ class FastAPIExtractor(BaseExtractor):
     def get_file_extensions(self) -> List[str]:
         """Get Python file extensions."""
         return [".py"]
+
+    def get_validation_libraries(self) -> List[ValidationLibrary]:
+        """FastAPI uses Pydantic for validation by default."""
+        from api_extractor.core.models import ValidationLibrary
+        return [ValidationLibrary.PYDANTIC]
 
     def extract(self, path: str):
         """

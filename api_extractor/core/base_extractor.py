@@ -14,6 +14,7 @@ from api_extractor.core.models import (
     HTTPMethod,
     FrameworkType,
     ExtractionResult,
+    ValidationLibrary,
 )
 from api_extractor.core.parser import LanguageParser
 
@@ -56,6 +57,17 @@ class BaseExtractor(ABC):
             List of Route objects
         """
         pass
+
+    def get_validation_libraries(self) -> List[ValidationLibrary]:
+        """
+        Get validation libraries detected by this extractor.
+
+        Override in subclasses that support validation library detection.
+
+        Returns:
+            List of detected validation libraries
+        """
+        return []
 
     def extract(self, path: str) -> ExtractionResult:
         """
