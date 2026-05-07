@@ -238,3 +238,213 @@ class TestFastAPIPolar:
         multi_method_paths = [p for p, methods in path_methods.items() if len(methods) > 1]
         assert len(multi_method_paths) >= 45, \
             f"Expected at least 45 paths with multiple HTTP methods, found {len(multi_method_paths)}"
+
+
+    def test_response_schemas_exact_counts(self, polar_path: str) -> None:
+        """Test exact counts of response schema extraction.
+
+        Polar uses response_model and return type annotations extensively.
+        Verifies proper schema extraction from both decorator params and type hints.
+        """
+        extractor = FastAPIExtractor()
+        result = extractor.extract(polar_path)
+
+        assert result.success
+
+        # Exact count of endpoints with response schemas
+        endpoints_with_schemas = [
+            ep for ep in result.endpoints
+            if ep.responses and ep.responses[0].response_schema is not None
+        ]
+
+        assert len(endpoints_with_schemas) == 332, \
+            f"Expected exactly 332 endpoints with response schemas, found {len(endpoints_with_schemas)}"
+
+        # Exact counts by response type
+        array_responses = [
+            ep for ep in endpoints_with_schemas
+            if ep.responses[0].response_schema.type == "array"
+        ]
+        object_responses = [
+            ep for ep in endpoints_with_schemas
+            if ep.responses[0].response_schema.type == "object"
+        ]
+
+        assert len(array_responses) == 2, \
+            f"Expected exactly 2 array responses, found {len(array_responses)}"
+        assert len(object_responses) == 330, \
+            f"Expected exactly 330 object responses, found {len(object_responses)}"
+
+    def test_specific_endpoint_1_metrics_dashboards(self, polar_path: str) -> None:
+        """Test GET /v1/metrics/dashboards returns list[MetricDashboardSchema].
+
+        Reference: https://github.com/polarsource/polar/blob/main/server/polar/metrics/endpoints.py#L295
+        Uses response_model=list[MetricDashboardSchema] in decorator.
+        """
+        extractor = FastAPIExtractor()
+        result = extractor.extract(polar_path)
+
+        # Find metrics dashboards endpoint
+        endpoint = None
+        for ep in result.endpoints:
+            if ep.path == "/v1/metrics/dashboards" and ep.method == HTTPMethod.GET:
+                endpoint = ep
+                break
+
+        assert endpoint is not None, "Metrics dashboards endpoint not found"
+        assert endpoint.source_line == 295, f"Expected line 295, got {endpoint.source_line}"
+
+        # Verify response schema
+        assert len(endpoint.responses) > 0
+        response = endpoint.responses[0]
+        assert response.response_schema is not None
+
+        # Should be array type from list[MetricDashboardSchema]
+        assert response.response_schema.type == "array"
+        assert response.response_schema.items is not None
+        assert response.response_schema.items.type == "object"
+
+        # Verify MetricDashboardSchema fields
+        properties = response.response_schema.items.properties
+        assert len(properties) == 3, f"Expected 3 properties, got {len(properties)}"
+        assert "name" in properties
+        assert "metrics" in properties
+        assert "organization_id" in properties
+
+    def test_specific_endpoint_2_organization_get(self, polar_path: str) -> None:
+        """Test GET /v1/organizations/{id} returns single Organization object.
+
+        Uses return type annotation for response schema.
+        """
+        extractor = FastAPIExtractor()
+        result = extractor.extract(polar_path)
+
+        # Find organization get endpoint
+        endpoint = None
+        for ep in result.endpoints:
+            if ep.path == "/v1/organizations/{id}" and ep.method == HTTPMethod.GET:
+                endpoint = ep
+                break
+
+        assert endpoint is not None, "Organization GET endpoint not found"
+        assert endpoint.source_line == 116
+
+        # Verify response schema
+        response = endpoint.responses[0]
+        assert response.response_schema is not None
+        assert response.response_schema.type == "object"
+
+        # Check Organization schema has many fields
+        properties = response.response_schema.properties
+        assert len(properties) == 29, f"Expected 29 properties, got {len(properties)}"
+
+        # Verify key fields
+        expected_fields = ["email", "website", "status", "details_submitted_at"]
+        for field in expected_fields:
+            assert field in properties, f"Field '{field}' missing"
+
+    def test_specific_endpoint_3_organization_patch_payout(self, polar_path: str) -> None:
+        """Test PATCH /v1/organizations/{id}/payout-account.
+
+        Tests nested path with object response.
+        """
+        extractor = FastAPIExtractor()
+        result = extractor.extract(polar_path)
+
+        endpoint = None
+        for ep in result.endpoints:
+            if ep.path == "/v1/organizations/{id}/payout-account" and ep.method == HTTPMethod.PATCH:
+                endpoint = ep
+                break
+
+        assert endpoint is not None
+        assert endpoint.source_line == 167
+
+        # Verify request body
+        assert endpoint.request_body is not None
+        assert endpoint.request_body.type == "object"
+        req_props = endpoint.request_body.properties
+        assert len(req_props) == 1
+        assert "payout_account_id" in req_props
+        assert req_props["payout_account_id"]["type"] == "string"
+
+        # Verify response
+        response = endpoint.responses[0]
+        assert response.response_schema is not None
+        assert response.response_schema.type == "object"
+
+        properties = response.response_schema.properties
+        assert len(properties) == 29
+        assert "email" in properties
+        assert "default_presentment_currency" in properties
+
+    def test_specific_endpoint_4_organization_kyc(self, polar_path: str) -> None:
+        """Test GET /v1/organizations/{id}/kyc.
+
+        Tests KYC endpoint with detailed schema.
+        """
+        extractor = FastAPIExtractor()
+        result = extractor.extract(polar_path)
+
+        endpoint = None
+        for ep in result.endpoints:
+            if ep.path == "/v1/organizations/{id}/kyc" and ep.method == HTTPMethod.GET:
+                endpoint = ep
+                break
+
+        assert endpoint is not None
+        assert endpoint.source_line == 203
+
+        response = endpoint.responses[0]
+        assert response.response_schema is not None
+        assert response.response_schema.type == "object"
+
+        properties = response.response_schema.properties
+        assert len(properties) == 30
+        assert "details" in properties
+        assert "status" in properties
+
+    def test_specific_endpoint_5_organization_post(self, polar_path: str) -> None:
+        """Test POST /v1/organizations/ creates new organization.
+
+        Tests POST endpoint with object response.
+        """
+        extractor = FastAPIExtractor()
+        result = extractor.extract(polar_path)
+
+        endpoint = None
+        for ep in result.endpoints:
+            if ep.path == "/v1/organizations/" and ep.method == HTTPMethod.POST:
+                endpoint = ep
+                break
+
+        assert endpoint is not None
+        assert endpoint.source_line == 225
+
+        # Verify request body (OrganizationCreate schema)
+        assert endpoint.request_body is not None
+        assert endpoint.request_body.type == "object"
+        req_props = endpoint.request_body.properties
+        assert len(req_props) == 16, f"Expected 16 request properties, got {len(req_props)}"
+
+        # Check required fields
+        assert "name" in endpoint.request_body.required
+        assert "slug" in endpoint.request_body.required
+
+        # Check key request fields
+        assert "name" in req_props
+        assert "slug" in req_props
+        assert "email" in req_props
+        assert req_props["name"]["type"] == "string"
+        assert req_props["slug"]["type"] == "string"
+
+        # Verify response (Organization schema)
+        response = endpoint.responses[0]
+        assert response.response_schema is not None
+        assert response.response_schema.type == "object"
+
+        properties = response.response_schema.properties
+        assert len(properties) == 29
+        assert "email" in properties
+        assert "website" in properties
+        assert "feature_settings" in properties

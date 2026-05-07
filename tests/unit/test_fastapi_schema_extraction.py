@@ -263,3 +263,65 @@ def test_fastapi_mixed_parameters():
     include_param = next((p for p in query_params if p.name == "include_details"), None)
     assert include_param is not None
     assert include_param.type == "boolean"
+
+
+def test_fastapi_return_type_annotation():
+    """Test return type annotation extraction (list[Model] and Model)."""
+    import tempfile
+
+    code = """
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class Item(BaseModel):
+    id: int
+    name: str
+    price: float
+
+@app.get("/items")
+def get_items() -> list[Item]:
+    return []
+
+@app.get("/item/{item_id}")
+def get_item(item_id: int) -> Item:
+    return Item(id=item_id, name="test", price=9.99)
+"""
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_file = os.path.join(tmpdir, "test.py")
+        with open(test_file, "w") as f:
+            f.write(code)
+
+        extractor = FastAPIExtractor()
+        result = extractor.extract(tmpdir)
+
+        assert result.success
+        assert len(result.endpoints) == 2
+
+        # Test list[Item] return type
+        list_endpoint = next((ep for ep in result.endpoints if ep.path == "/items"), None)
+        assert list_endpoint is not None
+        assert len(list_endpoint.responses) > 0
+
+        list_response = list_endpoint.responses[0]
+        assert list_response.response_schema is not None
+        assert list_response.response_schema.type == "array"
+        assert list_response.response_schema.items is not None
+        assert list_response.response_schema.items.type == "object"
+        assert "id" in list_response.response_schema.items.properties
+        assert "name" in list_response.response_schema.items.properties
+        assert "price" in list_response.response_schema.items.properties
+
+        # Test Item return type
+        item_endpoint = next((ep for ep in result.endpoints if "/item/{item_id}" in ep.path), None)
+        assert item_endpoint is not None
+        assert len(item_endpoint.responses) > 0
+
+        item_response = item_endpoint.responses[0]
+        assert item_response.response_schema is not None
+        assert item_response.response_schema.type == "object"
+        assert "id" in item_response.response_schema.properties
+        assert "name" in item_response.response_schema.properties
+        assert "price" in item_response.response_schema.properties

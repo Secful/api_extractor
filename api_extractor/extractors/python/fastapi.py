@@ -624,12 +624,17 @@ class FastAPIExtractor(BaseExtractor):
                 )
                 metadata.update(params_metadata)
 
+            # Store pydantic models for later resolution of return types
+            metadata["pydantic_models"] = pydantic_models
+
             # Add response model if present
             if response_model_name:
                 # Track that response_model was specified (even if we couldn't resolve it)
                 metadata["response_model_specified"] = True
-                if response_model_name in pydantic_models:
-                    metadata["response_model"] = pydantic_models[response_model_name]
+                # Parse response_model (could be "list[Model]" or "Model")
+                response_schema = self._parse_return_type_to_schema(response_model_name, pydantic_models)
+                if response_schema:
+                    metadata["response_model"] = response_schema
 
             # Add decorator metadata (summary, responses, etc)
             metadata.update(decorator_metadata)
@@ -856,39 +861,36 @@ class FastAPIExtractor(BaseExtractor):
 
             module_path = self.parser.get_node_text(module_name_node, source_code)
 
-            # Get name or names list
-            name_node = import_node.child_by_field_name("name")
-            if not name_node:
-                continue
+            # For multi-line imports with parentheses, tree-sitter puts import names
+            # as direct children of import_from_statement, not under a single "name" field
+            # Example: from x import (a, b, c) -> children are: from, module, import, (, a, ,, b, ,, c, )
 
-            # Handle both single imports and import lists
-            if name_node.type == "dotted_name" or name_node.type == "identifier":
-                # Single import: from x import y
-                import_name = self.parser.get_node_text(name_node, source_code)
-                imports[import_name] = f"{module_path}.{import_name}"
+            # Collect all imported names from import_node children
+            # Skip children before "import" keyword to avoid capturing module name
+            imported_names = []
+            seen_import_keyword = False
+            for child in import_node.children:
+                if child.type == "import":
+                    seen_import_keyword = True
+                    continue
 
-            elif name_node.type == "aliased_import":
-                # Aliased import: from x import y as z
-                actual_name_node = name_node.child_by_field_name("name")
-                alias_name_node = name_node.child_by_field_name("alias")
-                if actual_name_node and alias_name_node:
-                    import_name = self.parser.get_node_text(actual_name_node, source_code)
-                    alias_name = self.parser.get_node_text(alias_name_node, source_code)
-                    imports[alias_name] = f"{module_path}.{import_name}"
+                if not seen_import_keyword:
+                    continue
 
-            elif hasattr(name_node, 'children'):
-                # Import list: from x import (y, z as w, ...)
-                for child in name_node.children:
-                    if child.type == "dotted_name" or child.type == "identifier":
-                        import_name = self.parser.get_node_text(child, source_code)
-                        imports[import_name] = f"{module_path}.{import_name}"
-                    elif child.type == "aliased_import":
-                        actual_name_node = child.child_by_field_name("name")
-                        alias_name_node = child.child_by_field_name("alias")
-                        if actual_name_node and alias_name_node:
-                            import_name = self.parser.get_node_text(actual_name_node, source_code)
-                            alias_name = self.parser.get_node_text(alias_name_node, source_code)
-                            imports[alias_name] = f"{module_path}.{import_name}"
+                if child.type in ("dotted_name", "identifier"):
+                    import_name = self.parser.get_node_text(child, source_code)
+                    imported_names.append((import_name, import_name))  # (name, alias)
+                elif child.type == "aliased_import":
+                    actual_name_node = child.child_by_field_name("name")
+                    alias_name_node = child.child_by_field_name("alias")
+                    if actual_name_node and alias_name_node:
+                        import_name = self.parser.get_node_text(actual_name_node, source_code)
+                        alias_name = self.parser.get_node_text(alias_name_node, source_code)
+                        imported_names.append((import_name, alias_name))
+
+            # Add to imports dict
+            for import_name, alias_name in imported_names:
+                imports[alias_name] = f"{module_path}.{import_name}"
 
         return imports
 
@@ -1637,6 +1639,71 @@ class FastAPIExtractor(BaseExtractor):
             description=description,
         )
 
+    def _parse_return_type_to_schema(
+        self, return_type: str, pydantic_models: Dict[str, Schema]
+    ) -> Optional[Schema]:
+        """
+        Parse return type annotation to Schema.
+
+        Handles:
+        - list[ModelName] -> array schema with items
+        - List[ModelName] -> array schema with items
+        - ModelName -> object schema
+        - dict, str, int, etc -> basic types
+
+        Args:
+            return_type: Return type annotation string
+            pydantic_models: Available Pydantic models
+
+        Returns:
+            Schema object or None
+        """
+        import re
+
+        # Remove whitespace
+        return_type = return_type.strip()
+
+        # Handle list[X] or List[X]
+        list_match = re.match(r'(?:list|List)\[(.+)\]', return_type)
+        if list_match:
+            inner_type = list_match.group(1).strip()
+
+            # Check if inner type is a Pydantic model
+            if inner_type in pydantic_models:
+                return Schema(
+                    type="array",
+                    items=pydantic_models[inner_type],
+                )
+            else:
+                # Generic array
+                return Schema(
+                    type="array",
+                    description=f"Array of {inner_type}",
+                )
+
+        # Handle direct model reference
+        if return_type in pydantic_models:
+            return pydantic_models[return_type]
+
+        # Handle basic types
+        type_map = {
+            "str": "string",
+            "int": "integer",
+            "float": "number",
+            "bool": "boolean",
+            "dict": "object",
+            "Dict": "object",
+        }
+
+        if return_type in type_map:
+            return Schema(type=type_map[return_type])
+
+        # Unknown type - return generic schema with description
+        return Schema(
+            type="object",
+            description=f"Returns {return_type}",
+        )
+
     def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
         """
         Convert a Route to one or more Endpoint objects.
@@ -1676,12 +1743,9 @@ class FastAPIExtractor(BaseExtractor):
             # Only use return type annotation if NO response_model was specified in decorator
             elif "return_type" in route.metadata and not route.metadata.get("response_model_specified"):
                 return_type = route.metadata["return_type"]
-                # Create a simple schema indicating the return type
-                # We don't have the full model definition, so just use description
-                response_schema = Schema(
-                    type="object",
-                    description=f"Returns {return_type} object",
-                )
+                pydantic_models = route.metadata.get("pydantic_models", {})
+                # Parse return type to proper schema
+                response_schema = self._parse_return_type_to_schema(return_type, pydantic_models)
 
             # Add 200 response
             if response_schema:
