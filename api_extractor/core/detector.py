@@ -21,6 +21,7 @@ class FrameworkDetector:
     # JavaScript/TypeScript dependency patterns
     JS_FRAMEWORK_PATTERNS = {
         FrameworkType.EXPRESS: ["express"],
+        FrameworkType.EXPRESS_ZOD_API: ["express-zod-api"],
         FrameworkType.NESTJS: ["@nestjs/core", "@nestjs/common"],
         FrameworkType.FASTIFY: ["fastify"],
         FrameworkType.NEXTJS: ["next"],

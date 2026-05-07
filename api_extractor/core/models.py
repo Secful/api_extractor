@@ -12,6 +12,7 @@ class FrameworkType(str, Enum):
     FLASK = "flask"
     DJANGO_REST = "django_rest"
     EXPRESS = "express"
+    EXPRESS_ZOD_API = "express_zod_api"
     NESTJS = "nestjs"
     FASTIFY = "fastify"
     SPRING_BOOT = "spring_boot"

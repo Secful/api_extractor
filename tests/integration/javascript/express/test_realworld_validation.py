@@ -1,8 +1,5 @@
 """Integration tests against real-world validation projects."""
 
-import os
-import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -10,28 +7,8 @@ import pytest
 from api_extractor.extractors.javascript.express import ExpressExtractor
 
 
-@pytest.fixture(scope="module")
-def repos_dir():
-    """Create temporary directory for cloning repositories."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        yield Path(temp_dir)
-
-
-def clone_repo(url: str, dest: Path) -> bool:
-    """Clone a git repository if not already cloned."""
-    if dest.exists():
-        return True
-
-    try:
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", url, str(dest)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+# Base path for real-world test fixtures
+FIXTURES_BASE = Path(__file__).parent.parent.parent.parent / "fixtures" / "real-world" / "javascript" / "express"
 
 
 @pytest.mark.integration
@@ -39,13 +16,11 @@ class TestRealWorldJoi:
     """Test Joi validation extraction on real-world projects."""
 
     @pytest.fixture
-    def node_express_boilerplate(self, repos_dir):
-        """Clone node-express-boilerplate repository."""
-        repo_dir = repos_dir / "node-express-boilerplate"
-        if not clone_repo(
-            "https://github.com/hagopj13/node-express-boilerplate.git", repo_dir
-        ):
-            pytest.skip("Failed to clone repository")
+    def node_express_boilerplate(self):
+        """Path to node-express-boilerplate submodule."""
+        repo_dir = FIXTURES_BASE / "node-express-boilerplate"
+        if not repo_dir.exists():
+            pytest.skip("Submodule not initialized. Run: git submodule update --init")
         return repo_dir / "src"
 
     def test_node_express_boilerplate_routes(self, node_express_boilerplate):
@@ -69,10 +44,6 @@ class TestRealWorldJoi:
 
         # Count endpoints with validation
         with_body_schema = sum(1 for e in result.endpoints if e.request_body)
-        with_query_params = sum(
-            1 for e in result.endpoints
-            if any(p.location.value == "query" for p in e.parameters)
-        )
 
         # Cross-file imports are now supported
         assert with_body_schema >= 5, f"Expected body validation on multiple endpoints, found {with_body_schema}"
@@ -91,29 +62,72 @@ class TestRealWorldZod:
     """Test Zod validation extraction on real-world projects."""
 
     @pytest.fixture
-    def express_zod_api(self, repos_dir):
-        """Clone express-zod-api repository."""
-        repo_dir = repos_dir / "express-zod-api"
-        if not clone_repo(
-            "https://github.com/RobinTail/express-zod-api.git", repo_dir
-        ):
-            pytest.skip("Failed to clone repository")
+    def express_zod_api(self):
+        """Path to express-zod-api framework example."""
+        repo_dir = FIXTURES_BASE / "express-zod-api"
+        if not repo_dir.exists():
+            pytest.skip("Submodule not initialized. Run: git submodule update --init")
         return repo_dir / "example"
 
-    def test_express_zod_api_routes(self, express_zod_api):
-        """Test that routes are extracted from express-zod-api."""
-        extractor = ExpressExtractor()
-        result = extractor.extract(str(express_zod_api))
+    @pytest.fixture
+    def acquisitions(self):
+        """Path to acquisitions project (Express + Zod inline validation)."""
+        repo_dir = FIXTURES_BASE / "acquisitions"
+        if not repo_dir.exists():
+            pytest.skip("Submodule not initialized. Run: git submodule update --init")
+        return repo_dir / "src"
 
-        # Currently fails - express-zod-api uses custom routing
-        # Not standard Express patterns
+    def test_express_zod_api_routes(self, express_zod_api):
+        """Test express-zod-api framework extraction (declarative routing)."""
+        from api_extractor.extractors.javascript.express_zod_api import ExpressZodAPIExtractor
+
+        extractor = ExpressZodAPIExtractor()
+        result = extractor.extract(str(express_zod_api))
 
         print(f"  Routes found: {len(result.endpoints)}")
         print(f"  Errors: {result.errors[:3] if result.errors else 'None'}")
 
-        # Known issue: express-zod-api uses custom routing framework
-        # May need special handling or skip this project
-        # assert len(result.endpoints) >= 1, "Should find at least one route"
+        # express-zod-api uses declarative routing
+        assert result.success, f"Extraction failed: {result.errors}"
+        assert len(result.endpoints) >= 10, f"Expected at least 10 endpoints, found {len(result.endpoints)}"
+
+        # Check for known endpoints
+        paths = [e.path for e in result.endpoints]
+        assert any("/user/create" in p for p in paths), "Should find /user/create endpoint"
+
+        # Check method extraction
+        methods = [e.method.value for e in result.endpoints]
+        assert "POST" in methods, "Should have POST endpoints"
+        assert "GET" in methods, "Should have GET endpoints"
+        assert "PATCH" in methods, "Should have PATCH endpoints"
+
+    def test_acquisitions_routes(self, acquisitions):
+        """Test Express + Zod inline validation (controller-based validation)."""
+        from api_extractor.extractors.javascript.express import ExpressExtractor
+
+        extractor = ExpressExtractor()
+        result = extractor.extract(str(acquisitions))
+
+        print(f"  Routes found: {len(result.endpoints)}")
+
+        # Standard Express routing works
+        assert result.success, f"Extraction failed: {result.errors}"
+        assert len(result.endpoints) >= 7, f"Expected at least 7 endpoints, found {len(result.endpoints)}"
+
+        # Check for known endpoints
+        paths = [e.path for e in result.endpoints]
+        methods = [f"{e.method.value} {e.path}" for e in result.endpoints]
+
+        assert any("sign-up" in p for p in paths), f"Should find /sign-up endpoint. Found: {paths}"
+        assert any("POST" in m and "sign-up" in m for m in methods), f"Should have POST /sign-up. Found: {methods}"
+        assert any("{id}" in p for p in paths), f"Should find /:id endpoints. Found: {paths}"
+
+        # NOTE: Inline validation (schema.safeParse() in controller) is not extractable
+        # Only middleware-based validation can be statically analyzed
+        # This is a known limitation for Express + manual Zod validation
+        with_schemas = sum(1 for e in result.endpoints if e.request_body)
+        # Currently 0 because acquisitions uses inline validation, not middleware
+        print(f"  With schemas: {with_schemas} (inline validation not extractable)")
 
 
 @pytest.mark.integration
@@ -121,13 +135,12 @@ class TestRealWorldJSONSchema:
     """Test JSON Schema validation extraction on real-world projects."""
 
     @pytest.fixture
-    def fastify_example(self, repos_dir):
-        """Clone fastify-example repository."""
-        repo_dir = repos_dir / "fastify-example"
-        if not clone_repo(
-            "https://github.com/delvedor/fastify-example.git", repo_dir
-        ):
-            pytest.skip("Failed to clone repository")
+    def fastify_example(self):
+        """Path to fastify-example submodule."""
+        fastify_base = Path(__file__).parent.parent.parent.parent / "fixtures" / "real-world" / "javascript" / "fastify"
+        repo_dir = fastify_base / "fastify-example"
+        if not repo_dir.exists():
+            pytest.skip("Submodule not initialized. Run: git submodule update --init")
         return repo_dir
 
     def test_fastify_example_routes(self, fastify_example):
@@ -147,7 +160,7 @@ class TestRealWorldJSONSchema:
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_all_real_world_projects_summary(repos_dir):
+def test_all_real_world_projects_summary():
     """Run all real-world projects and provide summary."""
     results = {
         "joi": {"name": "node-express-boilerplate", "url": "hagopj13/node-express-boilerplate"},
@@ -165,7 +178,7 @@ def test_all_real_world_projects_summary(repos_dir):
 
     print("\n" + "="*70)
     print("Known Issues:")
-    print("  1. Cross-file imports not yet supported (Joi)")
-    print("  2. express-zod-api uses custom routing framework")
-    print("  3. Fastify needs dedicated extractor")
+    print("  1. Cross-file imports - SOLVED (Joi)")
+    print("  2. express-zod-api - SOLVED (dedicated extractor)")
+    print("  3. Fastify needs dedicated extractor (partial support)")
     print("="*70)

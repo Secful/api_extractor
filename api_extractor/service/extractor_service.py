@@ -35,6 +35,9 @@ def get_extractor(framework: FrameworkType):
     elif framework == FrameworkType.EXPRESS:
         from api_extractor.extractors.javascript.express import ExpressExtractor
         return ExpressExtractor()
+    elif framework == FrameworkType.EXPRESS_ZOD_API:
+        from api_extractor.extractors.javascript.express_zod_api import ExpressZodAPIExtractor
+        return ExpressZodAPIExtractor()
     elif framework == FrameworkType.NESTJS:
         from api_extractor.extractors.javascript.nestjs import NestJSExtractor
         return NestJSExtractor()

@@ -46,3 +46,15 @@
 [submodule "tests/fixtures/real-world/javascript/nestjs/twenty"]
 	path = tests/fixtures/real-world/javascript/nestjs/twenty
 	url = https://github.com/twentyhq/twenty.git
+[submodule "tests/fixtures/real-world/javascript/express/node-express-boilerplate"]
+	path = tests/fixtures/real-world/javascript/express/node-express-boilerplate
+	url = https://github.com/hagopj13/node-express-boilerplate.git
+[submodule "tests/fixtures/real-world/javascript/express/express-zod-api"]
+	path = tests/fixtures/real-world/javascript/express/express-zod-api
+	url = https://github.com/RobinTail/express-zod-api.git
+[submodule "tests/fixtures/real-world/javascript/fastify/fastify-example"]
+	path = tests/fixtures/real-world/javascript/fastify/fastify-example
+	url = https://github.com/delvedor/fastify-example.git
+[submodule "tests/fixtures/real-world/javascript/express/acquisitions"]
+	path = tests/fixtures/real-world/javascript/express/acquisitions
+	url = https://github.com/adrianhajdin/acquisitions.git
