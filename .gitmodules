@@ -58,3 +58,6 @@
 [submodule "tests/fixtures/real-world/javascript/express/acquisitions"]
 	path = tests/fixtures/real-world/javascript/express/acquisitions
 	url = https://github.com/adrianhajdin/acquisitions.git
+[submodule "tests/fixtures/real-world/python/flask/flask-pydantic"]
+	path = tests/fixtures/real-world/python/flask/flask-pydantic
+	url = https://github.com/pallets-eco/flask-pydantic.git
