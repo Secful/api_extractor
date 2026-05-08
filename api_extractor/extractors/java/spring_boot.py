@@ -708,6 +708,14 @@ class SpringBootExtractor(BaseExtractor):
                 type_text = self.parser.get_node_text(child, source_code)
                 field_type = self._parse_java_type(type_text)
 
+                # Extract inner type for generic collections
+                if "<" in type_text and ">" in type_text:
+                    base_type = type_text.split("<")[0].strip()
+                    if base_type in ("List", "Set", "Collection", "ArrayList"):
+                        inner_type_text = type_text[type_text.index("<") + 1:type_text.rindex(">")].strip()
+                        inner_openapi_type = self._parse_java_type(inner_type_text)
+                        constraints["items"] = {"type": inner_openapi_type}
+
             elif child.type == "variable_declarator":
                 # Get variable name
                 name_node = find_child_by_type(child, "identifier")
@@ -726,6 +734,7 @@ class SpringBootExtractor(BaseExtractor):
             result = {"name": field_name, "type": field_type}
             if is_required:
                 result["required"] = True
+            # Merge items constraint with other constraints
             if constraints:
                 result["constraints"] = constraints
             return result

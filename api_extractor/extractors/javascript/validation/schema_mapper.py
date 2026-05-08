@@ -41,6 +41,14 @@ class SchemaMapper:
                 schema_dict["type"] = "boolean"
             elif method_name == "array":
                 schema_dict["type"] = "array"
+                # Extract items from z.array(schema) argument
+                if args and isinstance(args[0], list):
+                    # Nested method chain: z.array(z.string())
+                    items_schema, _ = SchemaMapper.zod_to_openapi(args[0])
+                    schema_dict["items"] = items_schema
+                elif not schema_dict.get("items"):
+                    # Fallback for unresolved array items
+                    schema_dict["items"] = {"type": "object"}
             elif method_name == "object":
                 schema_dict["type"] = "object"
             elif method_name == "date":
@@ -137,6 +145,14 @@ class SchemaMapper:
                 schema_dict["type"] = "boolean"
             elif method_name == "array":
                 schema_dict["type"] = "array"
+                # Extract items from z.array(schema) argument
+                if args and isinstance(args[0], list):
+                    # Nested method chain: z.array(z.string())
+                    items_schema, _ = SchemaMapper.zod_to_openapi(args[0])
+                    schema_dict["items"] = items_schema
+                elif not schema_dict.get("items"):
+                    # Fallback for unresolved array items
+                    schema_dict["items"] = {"type": "object"}
             elif method_name == "object":
                 schema_dict["type"] = "object"
             elif method_name == "date":

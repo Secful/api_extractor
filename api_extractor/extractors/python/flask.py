@@ -14,6 +14,7 @@ from api_extractor.core.models import (
     Endpoint,
     Response,
     ParameterLocation,
+    ExtractionResult,
 )
 
 
@@ -47,6 +48,79 @@ class FlaskExtractor(BaseExtractor):
             libraries.append(ValidationLibrary.MARSHMALLOW)
         return libraries
 
+    def extract(self, path: str) -> ExtractionResult:
+        """
+        Two-pass extraction: collect schemas globally, then extract routes.
+
+        Args:
+            path: Path to codebase directory
+
+        Returns:
+            ExtractionResult with endpoints and errors
+        """
+        self.endpoints = []
+        self.errors = []
+        self.warnings = []
+        self.marshmallow_schemas = {}
+
+        # Find all Python files
+        files = self._find_source_files(path)
+
+        # PASS 1: Collect all Marshmallow schemas from all files
+        for file_path in files:
+            try:
+                source_code = self._read_file(file_path)
+                if not source_code:
+                    continue
+
+                tree = self.parser.parse_source(source_code, "python")
+                if not tree:
+                    continue
+
+                # Find schemas in current file
+                schemas = self._find_marshmallow_schemas(tree, source_code)
+
+                # Merge into global registry (later definitions override)
+                self.marshmallow_schemas.update(schemas)
+
+            except Exception as e:
+                self.errors.append(f"Error collecting schemas from {file_path}: {str(e)}")
+
+        # Expand nested model references with full schema set
+        if self.marshmallow_schemas:
+            self.marshmallow_schemas = self._expand_nested_models(self.marshmallow_schemas)
+
+        # PASS 2: Extract routes from each file (using global schema registry)
+        all_routes: List[Route] = []
+        for file_path in files:
+            try:
+                routes = self.extract_routes_from_file(file_path)
+                all_routes.extend(routes)
+            except Exception as e:
+                self.errors.append(f"Error extracting from {file_path}: {str(e)}")
+
+        # Convert routes to endpoints
+        for route in all_routes:
+            try:
+                endpoints = self._route_to_endpoints(route)
+                self.endpoints.extend(endpoints)
+            except Exception as e:
+                self.errors.append(f"Error converting route {route.path}: {str(e)}")
+
+        # Validate OpenAPI spec
+        if self.endpoints:
+            validation_errors = self._validate_openapi_spec()
+            if validation_errors:
+                self.errors.extend(validation_errors)
+
+        return ExtractionResult(
+            success=len(self.endpoints) > 0 and len(self.errors) == 0,
+            endpoints=self.endpoints,
+            errors=self.errors,
+            warnings=self.warnings,
+            frameworks_detected=[self.framework],
+        )
+
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
         """
         Extract routes from a Flask file.
@@ -59,8 +133,7 @@ class FlaskExtractor(BaseExtractor):
         """
         routes = []
 
-        # Clear cached data for this file
-        self.marshmallow_schemas = {}
+        # Clear per-file cached data
         self.smorest_imports = set()
 
         # Read file content
@@ -73,21 +146,17 @@ class FlaskExtractor(BaseExtractor):
         if not tree:
             return routes
 
-        # Extract imports to resolve schema references
-        imports = self._extract_imports(tree, source_code, file_path)
-
-        # Find Pydantic models (if any)
+        # Find local Pydantic models (for decorator resolution)
         pydantic_models = self._find_pydantic_models(tree, source_code)
 
-        # Find Marshmallow schemas
+        # Find local Marshmallow schemas (merge with global registry)
         marshmallow_schemas = self._find_marshmallow_schemas(tree, source_code)
 
-        # Resolve imported schemas
+        # Resolve imported schemas and merge with local + global
+        imports = self._extract_imports(tree, source_code, file_path)
         imported_schemas = self._resolve_imported_schemas(imports, file_path)
         marshmallow_schemas.update(imported_schemas)
-
-        # Store schemas for later resolution in _route_to_endpoints()
-        self.marshmallow_schemas = marshmallow_schemas
+        marshmallow_schemas.update(self.marshmallow_schemas)
 
         # First pass: Find Blueprint and Namespace definitions using query
         self._extract_blueprints_query(tree, source_code)
@@ -1498,43 +1567,57 @@ class FlaskExtractor(BaseExtractor):
 
             # Get name or names list
             name_node = import_node.child_by_field_name("name")
+
+            # Handle case where name field is None (multi-import on single line)
+            # In this case, imported names appear as direct children after 'import' keyword
             if not name_node:
+                # Find 'import' keyword position
+                import_keyword_idx = None
+                for i, child in enumerate(import_node.children):
+                    if child.type == "import":
+                        import_keyword_idx = i
+                        break
+
+                # Process children after 'import' keyword
+                if import_keyword_idx is not None:
+                    for child in import_node.children[import_keyword_idx + 1:]:
+                        if child.type == "dotted_name" or child.type == "identifier":
+                            import_name = self.parser.get_node_text(child, source_code)
+                            imports[import_name] = module_path
+                        elif child.type == "aliased_import":
+                            actual_name_node = child.child_by_field_name("name")
+                            alias_name_node = child.child_by_field_name("alias")
+                            if actual_name_node and alias_name_node:
+                                alias_name = self.parser.get_node_text(alias_name_node, source_code)
+                                imports[alias_name] = module_path
                 continue
 
             # Handle both single imports and import lists
             if name_node.type == "dotted_name" or name_node.type == "identifier":
                 # Single import: from x import y
                 import_name = self.parser.get_node_text(name_node, source_code)
-                imports[import_name] = f"{module_path}.{import_name}"
+                imports[import_name] = module_path
 
             elif name_node.type == "aliased_import":
                 # Aliased import: from x import y as z
                 actual_name_node = name_node.child_by_field_name("name")
                 alias_name_node = name_node.child_by_field_name("alias")
                 if actual_name_node and alias_name_node:
-                    import_name = self.parser.get_node_text(
-                        actual_name_node, source_code
-                    )
                     alias_name = self.parser.get_node_text(alias_name_node, source_code)
-                    imports[alias_name] = f"{module_path}.{import_name}"
+                    imports[alias_name] = module_path
 
             elif hasattr(name_node, "children"):
                 # Import list: from x import (y, z as w, ...)
                 for child in name_node.children:
                     if child.type == "dotted_name" or child.type == "identifier":
                         import_name = self.parser.get_node_text(child, source_code)
-                        imports[import_name] = f"{module_path}.{import_name}"
+                        imports[import_name] = module_path
                     elif child.type == "aliased_import":
                         actual_name_node = child.child_by_field_name("name")
                         alias_name_node = child.child_by_field_name("alias")
                         if actual_name_node and alias_name_node:
-                            import_name = self.parser.get_node_text(
-                                actual_name_node, source_code
-                            )
-                            alias_name = self.parser.get_node_text(
-                                alias_name_node, source_code
-                            )
-                            imports[alias_name] = f"{module_path}.{import_name}"
+                            alias_name = self.parser.get_node_text(alias_name_node, source_code)
+                            imports[alias_name] = module_path
 
         return imports
 
@@ -1650,7 +1733,25 @@ class FlaskExtractor(BaseExtractor):
             # Map Marshmallow field types to OpenAPI types
             openapi_type = self._marshmallow_to_openapi_type(field_type)
 
-            properties[field_name] = {"type": openapi_type}
+            field_schema = {"type": openapi_type}
+
+            # For List fields, extract inner type from arguments
+            if field_type == "List":
+                args_node = call_node.child_by_field_name("arguments")
+                if args_node and args_node.children:
+                    # Find first call in arguments: fields.List(fields.Str())
+                    for arg_child in args_node.children:
+                        if arg_child.type == "call":
+                            inner_func_node = arg_child.child_by_field_name("function")
+                            if inner_func_node and inner_func_node.type == "attribute":
+                                inner_attr = inner_func_node.child_by_field_name("attribute")
+                                if inner_attr:
+                                    inner_type = self.parser.get_node_text(inner_attr, source_code)
+                                    inner_openapi_type = self._marshmallow_to_openapi_type(inner_type)
+                                    field_schema["items"] = {"type": inner_openapi_type}
+                                    break
+
+            properties[field_name] = field_schema
 
         return Schema(
             type="object",
@@ -1750,6 +1851,72 @@ class FlaskExtractor(BaseExtractor):
                 continue
 
         return schemas
+
+    def _expand_nested_models(self, models: Dict[str, Schema]) -> Dict[str, Schema]:
+        """
+        Expand nested model references in marshmallow schemas.
+
+        Replaces "Reference: ModelName" placeholders with actual schemas.
+
+        Args:
+            models: Dictionary of models
+
+        Returns:
+            Models with expanded nested references
+        """
+        def expand_schema(schema: Schema, visited: set = None) -> Schema:
+            if visited is None:
+                visited = set()
+
+            if not isinstance(schema, Schema) or not schema.properties:
+                return schema
+
+            expanded_props = {}
+            for prop_name, prop_schema in schema.properties.items():
+                if isinstance(prop_schema, dict):
+                    prop_type = prop_schema.get("type")
+
+                    # Array with object items containing reference
+                    if prop_type == "array" and "items" in prop_schema:
+                        items = prop_schema["items"]
+                        if isinstance(items, dict) and items.get("type") == "object":
+                            if "description" in items and items["description"].startswith("Reference: "):
+                                model_name = items["description"].replace("Reference: ", "").strip()
+                                if model_name in models and model_name not in visited:
+                                    visited.add(model_name)
+                                    expanded_items = expand_schema(models[model_name], visited.copy())
+                                    items_dict = expanded_items.model_dump(exclude_none=True) if isinstance(expanded_items, Schema) else expanded_items
+                                    expanded_props[prop_name] = {
+                                        "type": "array",
+                                        "items": items_dict
+                                    }
+                                    continue
+
+                    # Direct object reference
+                    elif prop_type == "object" and "description" in prop_schema:
+                        desc = prop_schema["description"]
+                        if desc.startswith("Reference: "):
+                            model_name = desc.replace("Reference: ", "").strip()
+                            if model_name in models and model_name not in visited:
+                                visited.add(model_name)
+                                expanded_schema = expand_schema(models[model_name], visited.copy())
+                                schema_dict = expanded_schema.model_dump(exclude_none=True) if isinstance(expanded_schema, Schema) else expanded_schema
+                                expanded_props[prop_name] = schema_dict
+                                continue
+
+                expanded_props[prop_name] = prop_schema
+
+            return Schema(
+                type=schema.type,
+                properties=expanded_props,
+                required=schema.required if hasattr(schema, 'required') else None
+            )
+
+        expanded = {}
+        for name, schema in models.items():
+            expanded[name] = expand_schema(schema, set())
+
+        return expanded
 
     def _resolve_module_to_file(
         self, module_path: str, current_file_path: str

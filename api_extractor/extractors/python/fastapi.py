@@ -580,6 +580,9 @@ class FastAPIExtractor(BaseExtractor):
         imported_models = self._resolve_imported_models(imports, file_path)
         pydantic_models.update(imported_models)
 
+        # Second expansion pass with full model set (local + imported)
+        pydantic_models = self._expand_nested_models(pydantic_models)
+
         for match in route_matches:
             obj_name_node = match.get("obj_name")
             method_name_node = match.get("method_name")
@@ -825,7 +828,10 @@ class FastAPIExtractor(BaseExtractor):
         # Resolve inheritance - merge parent fields into child schemas
         resolved_models = self._resolve_model_inheritance(models)
 
-        return resolved_models
+        # Expand nested model references in properties
+        expanded_models = self._expand_nested_models(resolved_models)
+
+        return expanded_models
 
     def _extract_imports(
         self, tree, source_code: bytes, file_path: str
@@ -895,18 +901,28 @@ class FastAPIExtractor(BaseExtractor):
         return imports
 
     def _resolve_imported_models(
-        self, imports: Dict[str, str], current_file_path: str
+        self, imports: Dict[str, str], current_file_path: str, depth: int = 0, visited: set = None
     ) -> Dict[str, Schema]:
         """
         Resolve imported Pydantic models by parsing their source files.
 
+        Follows re-export chains (barrel files).
+
         Args:
             imports: Dictionary mapping names to module paths
             current_file_path: Path to current file for relative resolution
+            depth: Recursion depth (max 5 to prevent infinite loops)
+            visited: Set of visited file paths to prevent cycles
 
         Returns:
             Dictionary mapping model names to Schema objects
         """
+        if visited is None:
+            visited = set()
+
+        if depth > 5:  # Max chain depth
+            return {}
+
         models = {}
 
         for model_name, module_path in imports.items():
@@ -915,6 +931,12 @@ class FastAPIExtractor(BaseExtractor):
 
             if not file_path:
                 continue
+
+            # Skip if already visited (cycle detection)
+            if file_path in visited:
+                continue
+
+            visited.add(file_path)
 
             # Parse the file to extract Pydantic models
             try:
@@ -945,6 +967,20 @@ class FastAPIExtractor(BaseExtractor):
                         )
                         if type_alias_models:
                             models[model_name] = type_alias_models
+                        else:
+                            # Check if re-exported - follow the chain
+                            re_exports = self._extract_imports(tree, source_code, file_path)
+                            if model_name in re_exports:
+                                # Recursively follow re-export
+                                re_export_path = re_exports[model_name]
+                                chained_models = self._resolve_imported_models(
+                                    {model_name: re_export_path},
+                                    file_path,
+                                    depth + 1,
+                                    visited.copy()
+                                )
+                                if model_name in chained_models:
+                                    models[model_name] = chained_models[model_name]
 
             except Exception:
                 # Skip files that can't be parsed
@@ -1168,6 +1204,80 @@ class FastAPIExtractor(BaseExtractor):
 
         return resolved
 
+    def _expand_nested_models(self, models: Dict[str, Schema]) -> Dict[str, Schema]:
+        """
+        Expand nested model references in property schemas.
+
+        Replaces object placeholders with actual nested model schemas.
+        Handles: periods: list[MetricsPeriod], totals: MetricsTotals
+
+        Args:
+            models: Dictionary of resolved models
+
+        Returns:
+            Models with expanded nested references
+        """
+        def expand_schema(schema: Schema, visited: set = None) -> Schema:
+            """Recursively expand nested model refs."""
+            if visited is None:
+                visited = set()
+
+            if not isinstance(schema, Schema) or not schema.properties:
+                return schema
+
+            expanded_props = {}
+            for prop_name, prop_schema in schema.properties.items():
+                if isinstance(prop_schema, dict):
+                    prop_type = prop_schema.get("type")
+
+                    # Handle direct object reference
+                    if prop_type == "object" and "description" in prop_schema:
+                        desc = prop_schema["description"]
+                        # Check for "Reference: ModelName" pattern
+                        if desc.startswith("Reference: "):
+                            model_name = desc.replace("Reference: ", "").strip()
+                            if model_name in models and model_name not in visited:
+                                # Expand nested model
+                                visited.add(model_name)
+                                expanded_schema = expand_schema(models[model_name], visited.copy())
+                                # Convert Schema to dict
+                                schema_dict = expanded_schema.model_dump(exclude_none=True) if isinstance(expanded_schema, Schema) else expanded_schema
+                                expanded_props[prop_name] = schema_dict
+                                continue
+
+                    # Handle array with object items
+                    elif prop_type == "array" and "items" in prop_schema:
+                        items = prop_schema["items"]
+                        if isinstance(items, dict) and items.get("type") == "object":
+                            # Check items description for model reference
+                            if "description" in items and items["description"].startswith("Reference: "):
+                                model_name = items["description"].replace("Reference: ", "").strip()
+                                if model_name in models and model_name not in visited:
+                                    visited.add(model_name)
+                                    expanded_items = expand_schema(models[model_name], visited.copy())
+                                    # Convert Schema to dict for OpenAPI builder
+                                    items_dict = expanded_items.model_dump(exclude_none=True) if isinstance(expanded_items, Schema) else expanded_items
+                                    expanded_props[prop_name] = {
+                                        "type": "array",
+                                        "items": items_dict
+                                    }
+                                    continue
+
+                expanded_props[prop_name] = prop_schema
+
+            return Schema(
+                type=schema.type,
+                properties=expanded_props,
+                required=schema.required if hasattr(schema, 'required') else None
+            )
+
+        # Expand all models
+        expanded = {}
+        for name, schema in models.items():
+            expanded[name] = expand_schema(schema, set())
+
+        return expanded
+
     def _extract_model_names_from_type(self, type_expr: str) -> List[str]:
         """
         Extract model class names from a type expression.
@@ -1271,7 +1381,7 @@ class FastAPIExtractor(BaseExtractor):
             return None
 
         type_text = self.parser.get_node_text(type_node, source_code)
-        field_type, is_optional = self._parse_type_annotation(type_text)
+        field_type, is_optional, items_schema = self._parse_type_annotation(type_text)
 
         # Check if there's a default value
         right = assignment_node.child_by_field_name("right")
@@ -1281,6 +1391,19 @@ class FastAPIExtractor(BaseExtractor):
         is_required = not is_optional and not has_default
 
         field_schema = {"type": field_type}
+        if items_schema:
+            field_schema["items"] = items_schema
+
+        # Store model reference for object types
+        if field_type == "object" and type_text and type_text[0].isupper():
+            # Extract base type without Optional/Union wrappers
+            base_type = type_text
+            if "Optional[" in base_type:
+                base_type = base_type[base_type.find("[")+1:base_type.rfind("]")]
+            elif "|" in base_type:
+                parts = [p.strip() for p in base_type.split("|") if p.strip() != "None"]
+                base_type = parts[0] if parts else base_type
+            field_schema["description"] = f"Reference: {base_type.strip()}"
 
         return (field_name, field_schema, is_required)
 
@@ -1304,12 +1427,24 @@ class FastAPIExtractor(BaseExtractor):
         field_name = self.parser.get_node_text(field_name_node, source_code)
         type_text = self.parser.get_node_text(type_node, source_code)
 
-        field_type, is_optional = self._parse_type_annotation(type_text)
+        field_type, is_optional, items_schema = self._parse_type_annotation(type_text)
 
         # No default value, so required unless Optional
         is_required = not is_optional
 
         field_schema = {"type": field_type}
+        if items_schema:
+            field_schema["items"] = items_schema
+
+        # Store model reference for object types
+        if field_type == "object" and type_text and type_text[0].isupper():
+            base_type = type_text
+            if "Optional[" in base_type:
+                base_type = base_type[base_type.find("[")+1:base_type.rfind("]")]
+            elif "|" in base_type:
+                parts = [p.strip() for p in base_type.split("|") if p.strip() != "None"]
+                base_type = parts[0] if parts else base_type
+            field_schema["description"] = f"Reference: {base_type.strip()}"
 
         return (field_name, field_schema, is_required)
 
@@ -1321,8 +1456,11 @@ class FastAPIExtractor(BaseExtractor):
             type_text: Type annotation text
 
         Returns:
-            Tuple of (openapi_type, is_optional)
+            Tuple of (openapi_type, is_optional, items_schema)
+            items_schema is dict for array items or None
         """
+        import re
+
         is_optional = "Optional" in type_text or "None" in type_text
 
         # Extract base type
@@ -1350,13 +1488,30 @@ class FastAPIExtractor(BaseExtractor):
             "Dict": "object",
         }
 
-        # Check for List[T] pattern
-        if "List[" in base_type or "list[" in base_type:
-            return ("array", is_optional)
+        # Check for List[T] pattern and extract inner type
+        list_match = re.match(r'(?:list|List)\[(.+)\]', base_type)
+        if list_match:
+            inner_type = list_match.group(1).strip()
+            # Map inner type to OpenAPI type
+            inner_openapi = type_map.get(inner_type)
+            if inner_openapi:
+                items_schema = {"type": inner_openapi}
+            else:
+                # Likely a model reference (e.g., list[MetricsPeriod])
+                items_schema = {"type": "object", "description": f"Reference: {inner_type}"}
+            return ("array", is_optional, items_schema)
 
-        openapi_type = type_map.get(base_type, "string")
+        # Check if base type is a known type or model reference
+        openapi_type = type_map.get(base_type)
+        if openapi_type:
+            return (openapi_type, is_optional, None)
 
-        return (openapi_type, is_optional)
+        # Unknown type - check if it looks like a model name (starts with uppercase)
+        if base_type and base_type[0].isupper():
+            # Store as object reference for later expansion
+            return ("object", is_optional, None)
+
+        return ("string", is_optional, None)
 
     def _extract_response_model(
         self, args_node: Node, source_code: bytes
@@ -1577,7 +1732,7 @@ class FastAPIExtractor(BaseExtractor):
         Returns:
             Parameter object
         """
-        param_type, _ = self._parse_type_annotation(type_text)
+        param_type, _, _ = self._parse_type_annotation(type_text)
 
         # Extract description from Query(..., description="...")
         description = None
@@ -1615,7 +1770,7 @@ class FastAPIExtractor(BaseExtractor):
         Returns:
             Parameter object
         """
-        param_type, _ = self._parse_type_annotation(type_text)
+        param_type, _, _ = self._parse_type_annotation(type_text)
 
         # Extract description from Header(..., description="...")
         description = None
@@ -1675,9 +1830,21 @@ class FastAPIExtractor(BaseExtractor):
                     items=pydantic_models[inner_type],
                 )
             else:
-                # Generic array
+                # Try basic type mapping
+                type_map = {
+                    "str": "string",
+                    "int": "integer",
+                    "float": "number",
+                    "bool": "boolean",
+                    "dict": "object",
+                    "Dict": "object",
+                }
+                items_type = type_map.get(inner_type, "object")
+
+                # Generic array with fallback items
                 return Schema(
                     type="array",
+                    items=Schema(type=items_type),
                     description=f"Array of {inner_type}",
                 )
 
