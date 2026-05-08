@@ -12,7 +12,6 @@ from api_extractor.openapi.models import (
     Response,
     MediaType,
     RequestBody,
-    Tag,
 )
 
 
@@ -50,9 +49,6 @@ class OpenAPIBuilder:
         # Group endpoints by path
         paths: Dict[str, Dict[str, Operation]] = {}
 
-        # Collect all unique tags
-        all_tags = set()
-
         # Collect all schemas for components section
         self.collected_schemas: Dict[str, Schema] = {}
 
@@ -63,10 +59,6 @@ class OpenAPIBuilder:
             # Convert endpoint to operation
             operation = self._endpoint_to_operation(endpoint)
 
-            # Collect tags
-            if endpoint.tags:
-                all_tags.update(endpoint.tags)
-
             # Add to paths
             if path not in paths:
                 paths[path] = {}
@@ -76,9 +68,6 @@ class OpenAPIBuilder:
         path_items: Dict[str, PathItem] = {}
         for path, operations in paths.items():
             path_items[path] = PathItem(**operations)
-
-        # Build tags
-        tags = [Tag(name=tag) for tag in sorted(all_tags)]
 
         # Build components section if schemas were collected
         components = None
@@ -96,7 +85,6 @@ class OpenAPIBuilder:
             servers=[],
             paths=path_items,
             components=components,
-            tags=tags if tags else None,
         )
 
         return spec
@@ -138,7 +126,6 @@ class OpenAPIBuilder:
 
         # Build operation with extension fields
         operation_data = {
-            "tags": endpoint.tags if endpoint.tags else None,
             "summary": endpoint.summary,
             "description": endpoint.description,
             "operation_id": endpoint.operation_id,
