@@ -35,6 +35,7 @@ class FlaskExtractor(BaseExtractor):
         ] = {}  # namespace_var -> url_prefix (Flask-RESTX)
         self.smorest_imports: Set[str] = set()  # Track flask_smorest imports
         self.marshmallow_schemas: Dict[str, Schema] = {}  # Store schemas for resolution
+        self.restx_models: Dict[str, Schema] = {}  # Flask-RESTX Model registry
 
     def get_file_extensions(self) -> List[str]:
         """Get Python file extensions."""
@@ -62,11 +63,12 @@ class FlaskExtractor(BaseExtractor):
         self.errors = []
         self.warnings = []
         self.marshmallow_schemas = {}
+        self.restx_models = {}
 
         # Find all Python files
         files = self._find_source_files(path)
 
-        # PASS 1: Collect all Marshmallow schemas from all files
+        # PASS 1: Collect all Marshmallow schemas and Flask-RESTX models from all files
         for file_path in files:
             try:
                 source_code = self._read_file(file_path)
@@ -79,9 +81,11 @@ class FlaskExtractor(BaseExtractor):
 
                 # Find schemas in current file
                 schemas = self._find_marshmallow_schemas(tree, source_code)
-
-                # Merge into global registry (later definitions override)
                 self.marshmallow_schemas.update(schemas)
+
+                # Find Flask-RESTX models
+                restx_models = self._find_restx_models(tree, source_code)
+                self.restx_models.update(restx_models)
 
             except Exception as e:
                 self.errors.append(f"Error collecting schemas from {file_path}: {str(e)}")
@@ -233,13 +237,13 @@ class FlaskExtractor(BaseExtractor):
                 schema_metadata = {}
                 if decorated_def_node:
                     schema_metadata = self._extract_schema_decorators(
-                        decorated_def_node, source_code, marshmallow_schemas
+                        decorated_def_node, source_code, marshmallow_schemas, pydantic_models
                     )
 
                 # Extract function parameters for schemas
                 metadata = (
                     self._extract_function_metadata(
-                        func_def_node, source_code, pydantic_models
+                        func_def_node, source_code, pydantic_models, decorated_def_node
                     )
                     if func_def_node
                     else {}
@@ -291,13 +295,13 @@ class FlaskExtractor(BaseExtractor):
                 schema_metadata = {}
                 if decorated_def_node:
                     schema_metadata = self._extract_schema_decorators(
-                        decorated_def_node, source_code, marshmallow_schemas
+                        decorated_def_node, source_code, marshmallow_schemas, pydantic_models
                     )
 
                 # Extract function parameters for schemas
                 metadata = (
                     self._extract_function_metadata(
-                        func_def_node, source_code, pydantic_models
+                        func_def_node, source_code, pydantic_models, decorated_def_node
                     )
                     if func_def_node
                     else {}
@@ -860,15 +864,17 @@ class FlaskExtractor(BaseExtractor):
             class_name = self.parser.get_node_text(class_name_node, source_code)
             location = self.parser.get_node_location(class_name_node)
 
-            # Extract HTTP methods from Resource class body
-            http_methods = self._extract_resource_methods(class_body_node, source_code)
+            # Extract HTTP methods from Resource class body with decorators
+            methods_with_decorators = self._extract_resource_methods_with_decorators(
+                class_body_node, source_code
+            )
 
-            if not http_methods:
+            if not methods_with_decorators:
                 # If no HTTP methods found, skip this resource
                 continue
 
             # Create a route for each HTTP method
-            for http_method in http_methods:
+            for http_method, method_metadata in methods_with_decorators:
                 route = Route(
                     path=full_path,
                     methods=[http_method],
@@ -877,7 +883,11 @@ class FlaskExtractor(BaseExtractor):
                     raw_path=full_path,
                     source_file=file_path,
                     source_line=location["start_line"],
-                    metadata={"restx_resource": True, "class_name": class_name},
+                    metadata={
+                        "restx_resource": True,
+                        "class_name": class_name,
+                        **method_metadata,
+                    },
                 )
                 routes.append(route)
 
@@ -920,6 +930,59 @@ class FlaskExtractor(BaseExtractor):
                             pass
 
         return methods
+
+    def _extract_resource_methods_with_decorators(
+        self, class_body_node: Node, source_code: bytes
+    ) -> List[tuple[HTTPMethod, Dict[str, Any]]]:
+        """
+        Extract HTTP methods with decorator metadata from Flask-RESTX Resource class.
+
+        Args:
+            class_body_node: Class body node
+            source_code: Source code bytes
+
+        Returns:
+            List of tuples (HTTPMethod, metadata_dict)
+        """
+        methods_with_metadata = []
+        http_method_names = ["get", "post", "put", "delete", "patch", "head", "options"]
+
+        # Look for method definitions in class body (can be decorated or not)
+        for child in class_body_node.children:
+            func_def_node = None
+            decorated_def_node = None
+
+            if child.type == "function_definition":
+                func_def_node = child
+            elif child.type == "decorated_definition":
+                decorated_def_node = child
+                func_def_node = child.child_by_field_name("definition")
+
+            if func_def_node and func_def_node.type == "function_definition":
+                name_node = func_def_node.child_by_field_name("name")
+                if not name_node:
+                    continue
+
+                method_name = self.parser.get_node_text(name_node, source_code)
+                if method_name not in http_method_names:
+                    continue
+
+                try:
+                    http_method = HTTPMethod[method_name.upper()]
+                except KeyError:
+                    continue
+
+                # Extract decorator metadata if this is a decorated method
+                metadata = {}
+                if decorated_def_node:
+                    # Extract Flask-RESTX decorators (@marshal_with, @marshal_list_with)
+                    metadata = self._extract_schema_decorators(
+                        decorated_def_node, source_code, {}, {}
+                    )
+
+                methods_with_metadata.append((http_method, metadata))
+
+        return methods_with_metadata
 
     def _extract_url_prefix(self, args_node: Node, source_code: bytes) -> Optional[str]:
         """
@@ -1211,6 +1274,7 @@ class FlaskExtractor(BaseExtractor):
         func_def_node: Node,
         source_code: bytes,
         pydantic_models: Dict[str, Schema],
+        decorated_def_node: Optional[Node] = None,
     ) -> Dict[str, Any]:
         """
         Extract metadata from function definition.
@@ -1219,34 +1283,51 @@ class FlaskExtractor(BaseExtractor):
             func_def_node: Function definition node
             source_code: Source code bytes
             pydantic_models: Dictionary of Pydantic models
+            decorated_def_node: Optional decorated_definition node (to check for flask-pydantic)
 
         Returns:
             Metadata dictionary
         """
         metadata = {}
 
+        # Check if flask-pydantic @validate() decorator present
+        has_validate_decorator = False
+        if decorated_def_node:
+            for child in decorated_def_node.children:
+                if child.type == "decorator":
+                    decorator_call = child.children[1] if len(child.children) > 1 else None
+                    if decorator_call and decorator_call.type == "call":
+                        function_node = decorator_call.child_by_field_name("function")
+                        if function_node:
+                            func_name = self.parser.get_node_text(function_node, source_code)
+                            if func_name == "validate":
+                                has_validate_decorator = True
+                                break
+
         # Get parameters node
         params_node = func_def_node.child_by_field_name("parameters")
         if params_node:
             # Check for Pydantic model parameters
-            for param in params_node.children:
-                if param.type in ("typed_parameter", "typed_default_parameter"):
-                    # Get parameter type
-                    name_node = None
-                    type_node = None
+            # Skip if flask-pydantic @validate() present (handles params differently)
+            if not has_validate_decorator:
+                for param in params_node.children:
+                    if param.type in ("typed_parameter", "typed_default_parameter"):
+                        # Get parameter type
+                        name_node = None
+                        type_node = None
 
-                    for child in param.children:
-                        if child.type == "identifier" and not name_node:
-                            name_node = child
-                        elif child.type == "type":
-                            type_node = child
+                        for child in param.children:
+                            if child.type == "identifier" and not name_node:
+                                name_node = child
+                            elif child.type == "type":
+                                type_node = child
 
-                    if type_node:
-                        type_text = self.parser.get_node_text(type_node, source_code)
-                        # Check if type is a Pydantic model
-                        if type_text in pydantic_models:
-                            metadata["request_body"] = pydantic_models[type_text]
-                            break
+                        if type_node:
+                            type_text = self.parser.get_node_text(type_node, source_code)
+                            # Check if type is a Pydantic model
+                            if type_text in pydantic_models:
+                                metadata["request_body"] = pydantic_models[type_text]
+                                break
 
         # Extract query parameters from function body (request.args.get calls)
         func_body = func_def_node.child_by_field_name("body")
@@ -1255,7 +1336,209 @@ class FlaskExtractor(BaseExtractor):
             if query_params:
                 metadata["query_params"] = query_params
 
+            # Extract response schema from return statements
+            response_schema = self._extract_response_from_function_body(func_body, source_code)
+            if response_schema:
+                metadata["response_schema"] = response_schema
+
         return metadata
+
+    def _extract_response_from_function_body(
+        self, body_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Extract response schema from Flask function return statements.
+
+        Handles:
+        - return jsonify({"key": value})
+        - return {"key": value}
+        - return make_response(data, 200)
+
+        Args:
+            body_node: Function body node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object or None
+        """
+        # Find all return statements
+        return_statements = []
+
+        def find_returns(node):
+            if node.type == "return_statement":
+                return_statements.append(node)
+            for child in node.children:
+                find_returns(child)
+
+        find_returns(body_node)
+
+        # Process return statements (prefer last non-error return)
+        for return_stmt in reversed(return_statements):
+            # Get return value
+            for child in return_stmt.children:
+                if child.type in ("call", "dictionary", "list"):
+                    schema = self._parse_return_value_to_schema(child, source_code)
+                    if schema:
+                        return schema
+
+        return None
+
+    def _parse_return_value_to_schema(
+        self, value_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Parse return value to infer response schema.
+
+        Args:
+            value_node: Return value node (call, dictionary, or list)
+            source_code: Source code bytes
+
+        Returns:
+            Schema or None
+        """
+        # Pattern 1: jsonify(dict) or jsonify(**kwargs)
+        if value_node.type == "call":
+            func = value_node.child_by_field_name("function")
+            if func:
+                func_text = self.parser.get_node_text(func, source_code)
+                if "jsonify" in func_text or "make_response" in func_text:
+                    # Get first argument
+                    args = value_node.child_by_field_name("arguments")
+                    if args:
+                        for child in args.children:
+                            if child.type == "dictionary":
+                                return self._parse_dict_to_schema(child, source_code)
+                            elif child.type == "identifier":
+                                # Variable reference - try to trace
+                                # For now, skip tracing
+                                continue
+
+        # Pattern 2: Direct dictionary return
+        elif value_node.type == "dictionary":
+            return self._parse_dict_to_schema(value_node, source_code)
+
+        # Pattern 3: List return or list comprehension
+        elif value_node.type in ("list", "list_comprehension"):
+            # Try to infer item type from first element
+            for child in value_node.children:
+                if child.type == "dictionary":
+                    item_schema = self._parse_dict_to_schema(child, source_code)
+                    if item_schema:
+                        return Schema(type="array", items=item_schema)
+                    break
+            # Fallback to generic array
+            return Schema(type="array")
+
+        return None
+
+    def _parse_dict_to_schema(
+        self, dict_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Parse Python dictionary to Schema.
+
+        Args:
+            dict_node: Dictionary node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object or None
+        """
+        properties = {}
+        required = []
+
+        for child in dict_node.children:
+            if child.type == "pair":
+                # Extract key and value
+                key_node = child.child_by_field_name("key")
+                value_node = child.child_by_field_name("value")
+
+                if not key_node:
+                    continue
+
+                # Get property name
+                key_text = self.parser.get_node_text(key_node, source_code)
+                # Remove quotes if present
+                prop_name = key_text.strip('"\'')
+
+                # Infer type from value node
+                if value_node:
+                    prop_schema = self._infer_python_value_type(value_node, source_code)
+                    if prop_schema:
+                        properties[prop_name] = prop_schema
+                        required.append(prop_name)
+
+        if not properties:
+            return None
+
+        return Schema(
+            type="object",
+            properties=properties,
+            required=required if required else None,
+        )
+
+    def _infer_python_value_type(
+        self, value_node: Node, source_code: bytes
+    ) -> Optional[Dict[str, str]]:
+        """
+        Infer schema type from Python value node.
+
+        Args:
+            value_node: Value node
+            source_code: Source code bytes
+
+        Returns:
+            Schema dict or None
+        """
+        # String literal
+        if value_node.type == "string":
+            return {"type": "string"}
+
+        # Integer literal
+        elif value_node.type == "integer":
+            return {"type": "integer"}
+
+        # Float literal
+        elif value_node.type == "float":
+            return {"type": "number"}
+
+        # Boolean literal
+        elif value_node.type in ("true", "false", "True", "False"):
+            return {"type": "boolean"}
+
+        # None literal
+        elif value_node.type in ("none", "None"):
+            return {"type": "null"}
+
+        # List or list comprehension
+        elif value_node.type in ("list", "list_comprehension"):
+            # Try to infer item type from first element
+            for child in value_node.children:
+                if child.type not in ("[", "]", ",", "for_in_clause"):
+                    item_type = self._infer_python_value_type(child, source_code)
+                    if item_type:
+                        return {"type": "array", "items": item_type}
+                    break
+            return {"type": "array"}
+
+        # Nested dictionary
+        elif value_node.type == "dictionary":
+            nested_schema = self._parse_dict_to_schema(value_node, source_code)
+            if nested_schema:
+                return nested_schema.model_dump(exclude_none=True)
+            return {"type": "object"}
+
+        # Call expression (e.g., str(x), len(y))
+        elif value_node.type == "call":
+            # Default to string for function calls
+            return {"type": "string"}
+
+        # Variable/attribute reference
+        elif value_node.type in ("identifier", "attribute"):
+            # Default to string for variables
+            return {"type": "string"}
+
+        return None
 
     def _extract_query_params_from_body(
         self, body_node: Node, source_code: bytes
@@ -2046,22 +2329,27 @@ class FlaskExtractor(BaseExtractor):
         decorated_def_node,
         source_code: bytes,
         marshmallow_schemas: Dict[str, Schema],
+        pydantic_models: Dict[str, Schema] = None,
     ) -> Dict[str, Any]:
         """
-        Extract schema information from flask-apispec decorators.
+        Extract schema information from flask-apispec and flask-pydantic decorators.
 
         Looks for:
-        - @marshal_with(schema) - response schema
-        - @use_kwargs(schema) - request schema
+        - @marshal_with(schema) - response schema (Marshmallow/RESTX)
+        - @use_kwargs(schema) - request schema (Marshmallow)
+        - @validate() - request/response schemas (flask-pydantic)
 
         Args:
             decorated_def_node: decorated_definition node
             source_code: Source code bytes
             marshmallow_schemas: Available Marshmallow schemas
+            pydantic_models: Available Pydantic models
 
         Returns:
             Dictionary with response_schema and/or request_schema
         """
+        if pydantic_models is None:
+            pydantic_models = {}
         metadata = {}
 
         # Find all decorator nodes
@@ -2078,15 +2366,55 @@ class FlaskExtractor(BaseExtractor):
             if not function_node:
                 continue
 
-            function_name = self.parser.get_node_text(function_node, source_code)
+            # Get function name - handle both direct calls and attribute access
+            if function_node.type == "attribute":
+                # ns.marshal_with pattern - extract attribute name
+                attr_node = function_node.child_by_field_name("attribute")
+                if attr_node:
+                    function_name = self.parser.get_node_text(attr_node, source_code)
+                else:
+                    function_name = self.parser.get_node_text(function_node, source_code)
+            else:
+                function_name = self.parser.get_node_text(function_node, source_code)
 
-            # Check for @marshal_with(schema)
-            if function_name == "marshal_with":
+            # Check for @marshal_with(schema) or @marshal_list_with(schema)
+            # Supports both flask-apispec (Marshmallow) and Flask-RESTX (Model)
+            if function_name in ("marshal_with", "marshal_list_with"):
                 args_node = decorator_call.child_by_field_name("arguments")
                 if args_node:
                     schema_name = self._extract_first_argument(args_node, source_code)
-                    if schema_name and schema_name in marshmallow_schemas:
-                        metadata["response_schema"] = marshmallow_schemas[schema_name]
+                    if schema_name:
+                        # Try Flask-RESTX models first
+                        if schema_name in self.restx_models:
+                            schema = self.restx_models[schema_name]
+                            if function_name == "marshal_list_with":
+                                metadata["response_schema"] = Schema(
+                                    type="array",
+                                    items=schema
+                                )
+                            else:
+                                metadata["response_schema"] = schema
+                        # Try Marshmallow schemas
+                        elif schema_name in marshmallow_schemas:
+                            schema = marshmallow_schemas[schema_name]
+                            if function_name == "marshal_list_with":
+                                metadata["response_schema"] = Schema(
+                                    type="array",
+                                    items=schema
+                                )
+                            else:
+                                metadata["response_schema"] = schema
+                        else:
+                            # Try resolving instance name to class name (Marshmallow)
+                            resolved_schema = self._resolve_schema_name(schema_name, marshmallow_schemas)
+                            if resolved_schema:
+                                if function_name == "marshal_list_with":
+                                    metadata["response_schema"] = Schema(
+                                        type="array",
+                                        items=resolved_schema
+                                    )
+                                else:
+                                    metadata["response_schema"] = resolved_schema
 
             # Check for @use_kwargs(schema)
             elif function_name == "use_kwargs":
@@ -2095,6 +2423,46 @@ class FlaskExtractor(BaseExtractor):
                     schema_name = self._extract_first_argument(args_node, source_code)
                     if schema_name and schema_name in marshmallow_schemas:
                         metadata["request_schema"] = marshmallow_schemas[schema_name]
+
+            # Check for Flask-RESTX @ns.response(code, desc, model)
+            elif function_name == "response":
+                args_node = decorator_call.child_by_field_name("arguments")
+                if args_node:
+                    # Extract third argument (model)
+                    model_name = self._extract_third_argument(args_node, source_code)
+                    if model_name and model_name in self.restx_models:
+                        # Only set response_schema if not already set by marshal_with
+                        if "response_schema" not in metadata:
+                            metadata["response_schema"] = self.restx_models[model_name]
+
+            # Check for flask-pydantic @validate() decorator
+            elif function_name == "validate":
+                func_def_node = decorated_def_node.child_by_field_name("definition")
+                if func_def_node:
+                    # Extract response schema from return type annotation
+                    return_type_schema = self._extract_pydantic_return_type(
+                        func_def_node, source_code, pydantic_models
+                    )
+                    if return_type_schema:
+                        metadata["response_schema"] = return_type_schema
+
+                    # Check for decorator arguments: @validate(body=Model, query=Model)
+                    args_node = decorator_call.child_by_field_name("arguments")
+                    if args_node:
+                        decorator_request_data = self._extract_pydantic_decorator_args(
+                            args_node, source_code, pydantic_models
+                        )
+                        if decorator_request_data:
+                            metadata.update(decorator_request_data)
+
+                    # Extract request schemas from function parameters
+                    # Only if not already set by decorator args
+                    if "request_schema" not in metadata and "query_params" not in metadata:
+                        request_data = self._extract_pydantic_request_params(
+                            func_def_node, source_code, pydantic_models
+                        )
+                        if request_data:
+                            metadata.update(request_data)
 
         return metadata
 
@@ -2112,5 +2480,452 @@ class FlaskExtractor(BaseExtractor):
         for child in args_node.children:
             if child.type in ("identifier", "attribute"):
                 return self.parser.get_node_text(child, source_code)
+
+        return None
+
+    def _extract_third_argument(self, args_node, source_code: bytes) -> Optional[str]:
+        """
+        Extract the third argument from an argument list.
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+
+        Returns:
+            Argument text or None
+        """
+        arg_count = 0
+        for child in args_node.children:
+            if child.type in ("identifier", "attribute", "integer", "string"):
+                arg_count += 1
+                if arg_count == 3:
+                    if child.type in ("identifier", "attribute"):
+                        return self.parser.get_node_text(child, source_code)
+                    return None
+
+        return None
+
+    def _extract_pydantic_return_type(
+        self, func_def_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema]
+    ) -> Optional[Schema]:
+        """
+        Extract Pydantic model from function return type annotation.
+
+        Pattern: def get() -> ResponseModel:
+
+        Args:
+            func_def_node: Function definition node
+            source_code: Source code bytes
+            pydantic_models: Available Pydantic models
+
+        Returns:
+            Schema if Pydantic model found, None otherwise
+        """
+        # Get return type annotation
+        return_type_node = func_def_node.child_by_field_name("return_type")
+        if not return_type_node:
+            return None
+
+        return_type_text = self.parser.get_node_text(return_type_node, source_code)
+
+        # Check if return type is a Pydantic model
+        if return_type_text in pydantic_models:
+            return pydantic_models[return_type_text]
+
+        return None
+
+    def _extract_pydantic_request_params(
+        self, func_def_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema]
+    ) -> Dict[str, Any]:
+        """
+        Extract request schemas from flask-pydantic function parameters.
+
+        Patterns:
+        - def get(query: QueryModel): - query parameters
+        - def post(body: BodyModel): - request body
+        - def post(form: FormModel): - form data
+
+        Args:
+            func_def_node: Function definition node
+            source_code: Source code bytes
+            pydantic_models: Available Pydantic models
+
+        Returns:
+            Dictionary with request_schema and/or query_params
+        """
+        metadata = {}
+        query_params = []
+
+        # Get parameters node
+        params_node = func_def_node.child_by_field_name("parameters")
+        if not params_node:
+            return metadata
+
+        # Iterate through parameters
+        for param in params_node.children:
+            if param.type not in ("typed_parameter", "typed_default_parameter"):
+                continue
+
+            # Extract parameter name and type
+            param_name = None
+            type_text = None
+
+            for child in param.children:
+                if child.type == "identifier" and param_name is None:
+                    param_name = self.parser.get_node_text(child, source_code)
+                elif child.type == "type":
+                    type_text = self.parser.get_node_text(child, source_code)
+
+            if not param_name or not type_text:
+                continue
+
+            # Check if type is a Pydantic model
+            if type_text not in pydantic_models:
+                continue
+
+            schema = pydantic_models[type_text]
+
+            # Determine parameter location based on name convention
+            # flask-pydantic uses: query, body, form
+            if param_name == "query":
+                # Convert Pydantic model properties to query parameters
+                if schema.properties:
+                    for prop_name, prop_info in schema.properties.items():
+                        param = Parameter(
+                            name=prop_name,
+                            location=ParameterLocation.QUERY,
+                            type=prop_info.get("type", "string"),
+                            required=prop_name in (schema.required or []),
+                        )
+                        query_params.append(param)
+            elif param_name == "body":
+                metadata["request_schema"] = schema
+            elif param_name == "form":
+                # Form data - treat as request body
+                metadata["request_schema"] = schema
+
+        if query_params:
+            metadata["query_params"] = query_params
+
+        return metadata
+
+    def _extract_pydantic_decorator_args(
+        self, args_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema]
+    ) -> Dict[str, Any]:
+        """
+        Extract schemas from flask-pydantic @validate() decorator arguments.
+
+        Patterns:
+        - @validate(query=QueryModel)
+        - @validate(body=BodyModel)
+        - @validate(form=FormModel)
+        - @validate(body=BodyModel, query=QueryModel)
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+            pydantic_models: Available Pydantic models
+
+        Returns:
+            Dictionary with request_schema and/or query_params
+        """
+        metadata = {}
+        query_params = []
+
+        # Iterate through keyword arguments
+        for child in args_node.children:
+            if child.type != "keyword_argument":
+                continue
+
+            # Get argument name and value
+            name_node = child.child_by_field_name("name")
+            value_node = child.child_by_field_name("value")
+
+            if not name_node or not value_node:
+                continue
+
+            arg_name = self.parser.get_node_text(name_node, source_code)
+
+            # Skip non-schema arguments
+            if arg_name not in ("query", "body", "form"):
+                continue
+
+            # Get model name
+            if value_node.type not in ("identifier", "attribute"):
+                continue
+
+            model_name = self.parser.get_node_text(value_node, source_code)
+
+            if model_name not in pydantic_models:
+                continue
+
+            schema = pydantic_models[model_name]
+
+            # Handle based on argument name
+            if arg_name == "query":
+                # Convert Pydantic model properties to query parameters
+                if schema.properties:
+                    for prop_name, prop_info in schema.properties.items():
+                        param = Parameter(
+                            name=prop_name,
+                            location=ParameterLocation.QUERY,
+                            type=prop_info.get("type", "string"),
+                            required=prop_name in (schema.required or []),
+                        )
+                        query_params.append(param)
+            elif arg_name in ("body", "form"):
+                metadata["request_schema"] = schema
+
+        if query_params:
+            metadata["query_params"] = query_params
+
+        return metadata
+
+    def _find_restx_models(
+        self, tree, source_code: bytes
+    ) -> Dict[str, Schema]:
+        """
+        Find Flask-RESTX Model definitions.
+
+        Patterns:
+        - model_var = Model("name", {field: fields.Type(), ...})
+        - model_var = api.model("name", {field: fields.Type(), ...})
+        - model_var = ns.model("name", {field: fields.Type(), ...})
+
+        Args:
+            tree: AST tree
+            source_code: Source code bytes
+
+        Returns:
+            Dict of model_name -> Schema
+        """
+        models = {}
+
+        # Pattern 1: Model() direct call
+        assignment_query = """
+        (assignment
+          left: (identifier) @var_name
+          right: (call
+            function: (identifier) @func_name
+            arguments: (argument_list) @args))
+        """
+
+        matches = self.parser.query(tree, assignment_query, "python")
+
+        for match in matches:
+            func_name_node = match.get("func_name")
+            var_name_node = match.get("var_name")
+            args_node = match.get("args")
+
+            if not all([func_name_node, var_name_node, args_node]):
+                continue
+
+            func_name = self.parser.get_node_text(func_name_node, source_code)
+            if func_name != "Model":
+                continue
+
+            var_name = self.parser.get_node_text(var_name_node, source_code)
+
+            # Parse Model arguments: name (string), fields (dict)
+            schema = self._parse_restx_model_definition(args_node, source_code)
+            if schema:
+                models[var_name] = schema
+
+        # Pattern 2: api.model() or ns.model() attribute call
+        attribute_assignment_query = """
+        (assignment
+          left: (identifier) @var_name
+          right: (call
+            function: (attribute
+              attribute: (identifier) @method_name)
+            arguments: (argument_list) @args))
+        """
+
+        attr_matches = self.parser.query(tree, attribute_assignment_query, "python")
+
+        for match in attr_matches:
+            method_name_node = match.get("method_name")
+            var_name_node = match.get("var_name")
+            args_node = match.get("args")
+
+            if not all([method_name_node, var_name_node, args_node]):
+                continue
+
+            method_name = self.parser.get_node_text(method_name_node, source_code)
+            if method_name not in ("model", "inherit"):
+                continue
+
+            var_name = self.parser.get_node_text(var_name_node, source_code)
+
+            # Parse model arguments
+            schema = self._parse_restx_model_definition(args_node, source_code)
+            if schema:
+                models[var_name] = schema
+
+        return models
+
+    def _parse_restx_model_definition(
+        self, args_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Parse Flask-RESTX Model definition to Schema.
+
+        Pattern: Model("name", {field: fields.Type(), ...})
+
+        Args:
+            args_node: argument_list node
+            source_code: Source code bytes
+
+        Returns:
+            Schema if parsed, None otherwise
+        """
+        # Find dict argument (second argument)
+        dict_node = None
+        for child in args_node.children:
+            if child.type == "dictionary":
+                dict_node = child
+                break
+
+        if not dict_node:
+            return None
+
+        # Parse fields from dictionary
+        properties = {}
+        required = []
+
+        for child in dict_node.children:
+            if child.type == "pair":
+                key_node = child.child_by_field_name("key")
+                value_node = child.child_by_field_name("value")
+
+                if not all([key_node, value_node]):
+                    continue
+
+                field_name = self.parser.get_node_text(key_node, source_code).strip('"\'')
+
+                # Parse fields.Type() call
+                field_schema = self._parse_restx_field(value_node, source_code)
+                if field_schema:
+                    properties[field_name] = field_schema["schema"]
+                    if field_schema.get("required"):
+                        required.append(field_name)
+
+        if not properties:
+            return None
+
+        schema_dict = {
+            "type": "object",
+            "properties": properties,
+        }
+        if required:
+            schema_dict["required"] = required
+
+        return Schema(**schema_dict)
+
+    def _parse_restx_field(
+        self, field_node: Node, source_code: bytes
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Parse Flask-RESTX field definition.
+
+        Pattern: fields.String(required=True, description="...")
+
+        Args:
+            field_node: Field call node
+            source_code: Source code bytes
+
+        Returns:
+            Dict with schema and required flag
+        """
+        if field_node.type != "call":
+            return None
+
+        # Get field type from function name
+        func_node = field_node.child_by_field_name("function")
+        if not func_node or func_node.type != "attribute":
+            return None
+
+        attr_node = func_node.child_by_field_name("attribute")
+        if not attr_node:
+            return None
+
+        field_type = self.parser.get_node_text(attr_node, source_code)
+
+        # Map Flask-RESTX field types to JSON schema types
+        type_map = {
+            "String": "string",
+            "Integer": "integer",
+            "Float": "number",
+            "Boolean": "boolean",
+            "DateTime": "string",
+            "List": "array",
+            "Nested": "object",
+            "Raw": "object",
+        }
+
+        json_type = type_map.get(field_type, "string")
+
+        # Check for required=True in arguments
+        is_required = False
+        args_node = field_node.child_by_field_name("arguments")
+        if args_node:
+            args_text = self.parser.get_node_text(args_node, source_code)
+            if "required=True" in args_text:
+                is_required = True
+
+        schema = {"type": json_type}
+
+        # Handle List type - extract items type
+        if field_type == "List" and args_node:
+            # List(fields.String) pattern
+            for child in args_node.children:
+                if child.type == "attribute":
+                    item_field = self._parse_restx_field(child.parent, source_code)
+                    if item_field:
+                        schema["items"] = item_field["schema"]
+                    break
+
+        return {"schema": schema, "required": is_required}
+
+    def _resolve_schema_name(
+        self, schema_var_name: str, marshmallow_schemas: Dict[str, Schema]
+    ) -> Optional[Schema]:
+        """
+        Resolve schema variable name to schema class.
+
+        Handles patterns like:
+        - articles_schema -> ArticlesSchema or ArticleSchemas
+        - profile_schema -> ProfileSchema
+        - user_schema -> UserSchema
+
+        Args:
+            schema_var_name: Variable name (e.g., "articles_schema")
+            marshmallow_schemas: Available schemas dict
+
+        Returns:
+            Resolved Schema or None
+        """
+        # Try capitalizing with 's' preserved: articles_schema -> ArticlesSchema
+        capitalized_plural = (
+            schema_var_name.replace("_schema", "")
+            .replace("_", " ")
+            .title()
+            .replace(" ", "")
+            + "Schema"
+        )
+        if capitalized_plural in marshmallow_schemas:
+            return marshmallow_schemas[capitalized_plural]
+
+        # Try capitalizing with 's' moved: articles_schema -> ArticleSchemas
+        if schema_var_name.endswith("_schema"):
+            base = schema_var_name[:-7]  # Remove "_schema"
+            if base.endswith('s'):
+                # Already plural, try with 's' at end: articles -> ArticleSchemas
+                singular_base = base[:-1]
+                capitalized_alt = (
+                    singular_base.replace("_", " ").title().replace(" ", "") + "Schemas"
+                )
+                if capitalized_alt in marshmallow_schemas:
+                    return marshmallow_schemas[capitalized_alt]
 
         return None
