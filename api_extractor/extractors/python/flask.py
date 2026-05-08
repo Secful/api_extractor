@@ -1739,7 +1739,7 @@ class FlaskExtractor(BaseExtractor):
             if field_type == "List":
                 args_node = call_node.child_by_field_name("arguments")
                 if args_node and args_node.children:
-                    # Find first call in arguments: fields.List(fields.Str())
+                    # Find first call in arguments: fields.List(fields.Str()) or fields.List(fields.Nested(Schema))
                     for arg_child in args_node.children:
                         if arg_child.type == "call":
                             inner_func_node = arg_child.child_by_field_name("function")
@@ -1747,9 +1747,50 @@ class FlaskExtractor(BaseExtractor):
                                 inner_attr = inner_func_node.child_by_field_name("attribute")
                                 if inner_attr:
                                     inner_type = self.parser.get_node_text(inner_attr, source_code)
-                                    inner_openapi_type = self._marshmallow_to_openapi_type(inner_type)
-                                    field_schema["items"] = {"type": inner_openapi_type}
+
+                                    # Handle Nested(SchemaName) or Nested(SchemaName()) - extract schema reference
+                                    if inner_type == "Nested":
+                                        nested_args = arg_child.child_by_field_name("arguments")
+                                        if nested_args and nested_args.children:
+                                            for nested_arg in nested_args.children:
+                                                schema_name = None
+                                                if nested_arg.type in ("identifier", "attribute"):
+                                                    schema_name = self.parser.get_node_text(nested_arg, source_code)
+                                                elif nested_arg.type == "call":
+                                                    # Nested(SchemaName()) - extract function name
+                                                    func_node = nested_arg.child_by_field_name("function")
+                                                    if func_node:
+                                                        schema_name = self.parser.get_node_text(func_node, source_code)
+
+                                                if schema_name:
+                                                    field_schema["items"] = {
+                                                        "type": "object",
+                                                        "description": f"Reference: {schema_name}"
+                                                    }
+                                                    break
+                                    else:
+                                        # Primitive type
+                                        inner_openapi_type = self._marshmallow_to_openapi_type(inner_type)
+                                        field_schema["items"] = {"type": inner_openapi_type}
                                     break
+
+            # For Nested fields, extract schema reference
+            elif field_type == "Nested":
+                args_node = call_node.child_by_field_name("arguments")
+                if args_node and args_node.children:
+                    for arg_child in args_node.children:
+                        schema_name = None
+                        if arg_child.type in ("identifier", "attribute"):
+                            schema_name = self.parser.get_node_text(arg_child, source_code)
+                        elif arg_child.type == "call":
+                            # Nested(SchemaName()) - extract function name
+                            func_node = arg_child.child_by_field_name("function")
+                            if func_node:
+                                schema_name = self.parser.get_node_text(func_node, source_code)
+
+                        if schema_name:
+                            field_schema["description"] = f"Reference: {schema_name}"
+                            break
 
             properties[field_name] = field_schema
 
