@@ -1254,6 +1254,27 @@ class NestJSExtractor(BaseExtractor):
                 if value_node:
                     return self._parse_type_value(value_node, source_code)
 
+        # Look for enum declaration - query all enums
+        enum_query = """
+        (enum_declaration
+          name: (identifier) @name
+          body: (enum_body) @body)
+        """
+
+        matches = self.parser.query(tree, enum_query, "typescript")
+        for match in matches:
+            name_node = match.get("name")
+            if not name_node:
+                continue
+
+            name = self.parser.get_node_text(name_node, source_code)
+            if name == type_name:
+                body_node = match.get("body")
+                if body_node:
+                    enum_values = self._parse_enum_body(body_node, source_code)
+                    if enum_values:
+                        return Schema(type="string", enum=enum_values)
+
         # Look for class declaration - query all classes
         class_query = """
         (class_declaration
@@ -1881,3 +1902,49 @@ class NestJSExtractor(BaseExtractor):
 
         # No decorator hints found, return original schema
         return schema
+
+    def _parse_enum_body(self, body_node: Node, source_code: bytes) -> List[str]:
+        """
+        Parse enum body and extract enum values.
+
+        Args:
+            body_node: Enum body node
+            source_code: Source code bytes
+
+        Returns:
+            List of enum string values
+        """
+        enum_values = []
+
+        for child in body_node.children:
+            # Skip braces and commas
+            if child.type in ("{", "}", ","):
+                continue
+
+            # Property identifier is the enum member
+            if child.type == "property_identifier":
+                # Check if it has an initializer (= 'VALUE')
+                next_idx = body_node.children.index(child) + 1
+                if next_idx < len(body_node.children):
+                    next_node = body_node.children[next_idx]
+                    # Check for assignment
+                    if self.parser.get_node_text(next_node, source_code) == "=":
+                        # Get value node (next after =)
+                        value_idx = next_idx + 1
+                        if value_idx < len(body_node.children):
+                            value_node = body_node.children[value_idx]
+                            # Extract string value
+                            if value_node.type == "string":
+                                value = self.parser.extract_string_value(value_node, source_code)
+                                enum_values.append(value)
+                                continue
+                            # Numeric or computed values - use member name
+                            member_name = self.parser.get_node_text(child, source_code)
+                            enum_values.append(member_name)
+                            continue
+
+                # No initializer - use member name as value
+                member_name = self.parser.get_node_text(child, source_code)
+                enum_values.append(member_name)
+
+        return enum_values
