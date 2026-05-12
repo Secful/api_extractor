@@ -1362,11 +1362,12 @@ class NestJSExtractor(BaseExtractor):
         prop_name = None
         prop_schema = None
         is_optional = False
+        decorators = []
 
         for child in prop_node.children:
-            # Skip decorators
+            # Collect decorators for analysis
             if child.type == "decorator":
-                continue
+                decorators.append(child)
             elif child.type == "property_identifier":
                 prop_name = self.parser.get_node_text(child, source_code)
             elif child.type == "?":
@@ -1384,6 +1385,13 @@ class NestJSExtractor(BaseExtractor):
         # If we couldn't parse the type, fall back to string
         if not prop_schema:
             prop_schema = {"type": "string"}
+
+        # Apply decorator-based type inference (highest priority)
+        prop_schema = self._apply_decorator_hints(decorators, prop_schema, source_code)
+
+        # Apply field name heuristics (fallback if decorators didn't help)
+        prop_schema = self._apply_timestamp_heuristics(prop_name, prop_schema)
+        prop_schema = self._apply_uuid_heuristics(prop_name, prop_schema)
 
         return (prop_name, prop_schema, not is_optional)
 
@@ -1403,9 +1411,12 @@ class NestJSExtractor(BaseExtractor):
         prop_name = None
         prop_schema = None
         is_optional = False
+        decorators = []
 
         for child in prop_node.children:
-            if child.type == "property_identifier":
+            if child.type == "decorator":
+                decorators.append(child)
+            elif child.type == "property_identifier":
                 prop_name = self.parser.get_node_text(child, source_code)
             elif child.type == "?":
                 is_optional = True
@@ -1422,6 +1433,13 @@ class NestJSExtractor(BaseExtractor):
         # If we couldn't parse the type, fall back to string
         if not prop_schema:
             prop_schema = {"type": "string"}
+
+        # Apply decorator-based type inference (highest priority)
+        prop_schema = self._apply_decorator_hints(decorators, prop_schema, source_code)
+
+        # Apply field name heuristics (fallback if decorators didn't help)
+        prop_schema = self._apply_timestamp_heuristics(prop_name, prop_schema)
+        prop_schema = self._apply_uuid_heuristics(prop_name, prop_schema)
 
         return (prop_name, prop_schema, not is_optional)
 
@@ -1617,8 +1635,14 @@ class NestJSExtractor(BaseExtractor):
 
         # Handle type references: Tag, User, Account, etc.
         elif type_node.type == "type_identifier":
-            # For now, just mark as object
-            # TODO: Could resolve the referenced type in future enhancement
+            type_text = self.parser.get_node_text(type_node, source_code)
+
+            # Handle Date type
+            if type_text == "Date":
+                return {"type": "string", "format": "date-time"}
+
+            # For other types, mark as object for now
+            # TODO: Could resolve enums, custom types, etc.
             return {"type": "object"}
 
         # Handle generic types: Array<T>, Promise<T>, etc.
@@ -1640,20 +1664,220 @@ class NestJSExtractor(BaseExtractor):
             if type_name == "Array" and type_args:
                 item_schema = self._parse_type_node_to_schema(type_args[0], source_code)
                 return {"type": "array", "items": item_schema}
+
+            # Handle Promise<T> - unwrap to inner type (common in async handlers)
+            elif type_name == "Promise" and type_args:
+                return self._parse_type_node_to_schema(type_args[0], source_code)
+
+            # Handle Partial<T> - unwrap to inner type (all fields optional)
+            elif type_name == "Partial" and type_args:
+                return self._parse_type_node_to_schema(type_args[0], source_code)
+
+            # Handle Record<K, V> - treat as object with additionalProperties
+            elif type_name == "Record" and len(type_args) >= 2:
+                value_schema = self._parse_type_node_to_schema(type_args[1], source_code)
+                return {
+                    "type": "object",
+                    "additionalProperties": value_schema
+                }
+
             else:
                 # Other generics - just treat as object
                 return {"type": "object"}
 
-        # Handle union types: string | number
+        # Handle union types: string | number, T | null, etc.
         elif type_node.type == "union_type":
-            # For now, just use the first type in the union
-            # TODO: Could generate oneOf/anyOf in future
+            # Collect all union members
+            union_types = []
+            has_null = False
+            has_undefined = False
+
             for child in type_node.children:
-                if child.type not in ("|",):
-                    return self._parse_type_node_to_schema(child, source_code)
-            return {"type": "string"}
+                if child.type == "|":
+                    continue
+                child_text = self.parser.get_node_text(child, source_code)
+                if child_text in ("null", "NULL"):
+                    has_null = True
+                elif child_text in ("undefined", "void"):
+                    has_undefined = True
+                else:
+                    union_types.append(child)
+
+            # If union contains null/undefined, pick the non-null type
+            if union_types:
+                # Prefer the first non-null type
+                schema = self._parse_type_node_to_schema(union_types[0], source_code)
+                # Mark as nullable if union included null
+                if has_null or has_undefined:
+                    schema["nullable"] = True
+                return schema
+
+            # Fallback if all types were null/undefined
+            return {"type": "string", "nullable": True}
 
         # Fallback for unknown types
         else:
             type_text = self.parser.get_node_text(type_node, source_code)
             return {"type": self._parse_typescript_type(type_text)}
+
+    def _apply_timestamp_heuristics(
+        self, field_name: str, schema: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Apply heuristics to detect timestamp fields by name and override type if needed.
+
+        Args:
+            field_name: The property/field name
+            schema: Current schema dict
+
+        Returns:
+            Updated schema dict with date-time format if applicable
+        """
+        # Common timestamp field names
+        TIMESTAMP_FIELD_NAMES = {
+            'createdAt', 'updatedAt', 'deletedAt', 'deletedDate',
+            'created_at', 'updated_at', 'deleted_at', 'deleted_date',
+            'timestamp', 'createdDate', 'updatedDate', 'modifiedAt',
+            'modified_at', 'lastModified', 'last_modified', 'publishedAt',
+            'published_at', 'expiresAt', 'expires_at', 'startedAt', 'started_at',
+            'completedAt', 'completed_at', 'finishedAt', 'finished_at'
+        }
+
+        # Only apply heuristic if field matches known timestamp names
+        # and current type is object (fallback) or string (generic)
+        if field_name in TIMESTAMP_FIELD_NAMES:
+            current_type = schema.get("type")
+            # Override if type is object (unknown) or string without format
+            if current_type == "object" or (current_type == "string" and "format" not in schema):
+                # Preserve nullable if present
+                result = {"type": "string", "format": "date-time"}
+                if schema.get("nullable"):
+                    result["nullable"] = True
+                return result
+
+        return schema
+
+    def _apply_uuid_heuristics(
+        self, field_name: str, schema: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Apply heuristics to detect UUID/ID fields by name and override type if needed.
+
+        Args:
+            field_name: The property/field name
+            schema: Current schema dict
+
+        Returns:
+            Updated schema dict with uuid format if applicable
+        """
+        current_type = schema.get("type")
+
+        # Only apply if type is string or object (fallback)
+        if current_type not in ("string", "object"):
+            return schema
+
+        # Exact matches for ID fields
+        if field_name in ('id', 'uuid', 'guid', 'ID', 'UUID', 'GUID'):
+            result = {"type": "string", "format": "uuid"}
+            if schema.get("nullable"):
+                result["nullable"] = True
+            return result
+
+        # Suffix patterns for ID fields
+        if (field_name.endswith('Id') or field_name.endswith('ID') or
+            field_name.endswith('Uuid') or field_name.endswith('UUID') or
+            field_name.endswith('Guid') or field_name.endswith('GUID')):
+            # Only override if no format already set
+            if "format" not in schema:
+                result = {"type": "string", "format": "uuid"}
+                if schema.get("nullable"):
+                    result["nullable"] = True
+                return result
+
+        return schema
+
+    def _apply_decorator_hints(
+        self, decorators: List[Node], schema: Dict[str, Any], source_code: bytes
+    ) -> Dict[str, Any]:
+        """
+        Extract type hints from decorators (class-validator, GraphQL, etc.).
+
+        Args:
+            decorators: List of decorator nodes
+            schema: Current schema dict
+            source_code: Source code bytes
+
+        Returns:
+            Updated schema with decorator-inferred types
+        """
+        for decorator in decorators:
+            decorator_text = self.parser.get_node_text(decorator, source_code)
+
+            # class-validator decorators
+            if "@IsUUID()" in decorator_text or "@IsUUID" in decorator_text:
+                result = {"type": "string", "format": "uuid"}
+                if schema.get("nullable"):
+                    result["nullable"] = True
+                return result
+
+            elif "@IsDate()" in decorator_text or "@IsDate" in decorator_text:
+                result = {"type": "string", "format": "date-time"}
+                if schema.get("nullable"):
+                    result["nullable"] = True
+                return result
+
+            elif "@IsInt()" in decorator_text or "@IsInt" in decorator_text or "@IsNumber()" in decorator_text:
+                return {"type": "integer"}
+
+            elif "@IsBoolean()" in decorator_text or "@IsBoolean" in decorator_text:
+                return {"type": "boolean"}
+
+            elif "@IsEmail()" in decorator_text or "@IsEmail" in decorator_text:
+                return {"type": "string", "format": "email"}
+
+            elif "@IsUrl()" in decorator_text or "@IsUrl" in decorator_text or "@IsURL()" in decorator_text:
+                return {"type": "string", "format": "uri"}
+
+            elif "@IsEnum(" in decorator_text:
+                # Could extract enum type here, but need import resolution
+                # For now, mark as string (better than object)
+                return {"type": "string"}
+
+            # GraphQL Field decorators with type functions
+            elif "@Field(" in decorator_text:
+                # Extract type function: @Field(() => ID) or @Field(() => GraphQLISODateTime)
+                if "=> ID" in decorator_text or "=> GraphQLID" in decorator_text:
+                    result = {"type": "string", "format": "uuid"}
+                    if schema.get("nullable"):
+                        result["nullable"] = True
+                    return result
+
+                elif "GraphQLISODateTime" in decorator_text or "=> Date" in decorator_text:
+                    result = {"type": "string", "format": "date-time"}
+                    if schema.get("nullable"):
+                        result["nullable"] = True
+                    return result
+
+                elif "=> Int" in decorator_text or "=> Float" in decorator_text:
+                    return {"type": "number"}
+
+                elif "=> Boolean" in decorator_text:
+                    return {"type": "boolean"}
+
+            # NestJS Swagger/OpenAPI decorators
+            elif "@ApiProperty(" in decorator_text:
+                # Extract type from ApiProperty options
+                if "type: 'uuid'" in decorator_text or "format: 'uuid'" in decorator_text:
+                    result = {"type": "string", "format": "uuid"}
+                    if schema.get("nullable"):
+                        result["nullable"] = True
+                    return result
+
+                elif "type: 'date'" in decorator_text or "format: 'date-time'" in decorator_text:
+                    result = {"type": "string", "format": "date-time"}
+                    if schema.get("nullable"):
+                        result["nullable"] = True
+                    return result
+
+        # No decorator hints found, return original schema
+        return schema
