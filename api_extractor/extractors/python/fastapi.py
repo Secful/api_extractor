@@ -574,14 +574,29 @@ class FastAPIExtractor(BaseExtractor):
         imports = self._extract_imports(tree, source_code, file_path)
 
         # Build a registry of Pydantic models (local + imported)
-        pydantic_models = self._find_pydantic_models(tree, source_code)
+        # Collect local type aliases first (so we can pass to model parsing)
+        local_type_aliases = self._find_local_type_aliases(tree, source_code)
+
+        # Find enum classes and add to type aliases (StrEnum → string, IntEnum → integer)
+        enum_classes = self._find_enum_classes(tree, source_code)
+
+        # Resolve imported type aliases (only those that look like aliases - uppercase)
+        imported_type_aliases = self._resolve_imported_type_aliases(imports, file_path)
+
+        # Merge: local + enums + imported
+        combined_type_aliases = {**local_type_aliases, **enum_classes, **imported_type_aliases}
+
+        pydantic_models = self._find_pydantic_models_with_aliases(tree, source_code, combined_type_aliases)
 
         # Resolve imported models
         imported_models = self._resolve_imported_models(imports, file_path)
         pydantic_models.update(imported_models)
 
-        # Second expansion pass with full model set (local + imported)
-        pydantic_models = self._expand_nested_models(pydantic_models)
+        # Second expansion pass with lazy import resolution
+        # Pass imports dict so expansion can resolve on-demand
+        pydantic_models = self._expand_nested_models_lazy(
+            pydantic_models, combined_type_aliases, imports, file_path
+        )
 
         for match in route_matches:
             obj_name_node = match.get("obj_name")
@@ -629,13 +644,17 @@ class FastAPIExtractor(BaseExtractor):
 
             # Store pydantic models for later resolution of return types
             metadata["pydantic_models"] = pydantic_models
+            metadata["type_aliases"] = combined_type_aliases
+            metadata["imports"] = imports  # Store imports for lazy resolution
 
             # Add response model if present
             if response_model_name:
                 # Track that response_model was specified (even if we couldn't resolve it)
                 metadata["response_model_specified"] = True
                 # Parse response_model (could be "list[Model]" or "Model")
-                response_schema = self._parse_return_type_to_schema(response_model_name, pydantic_models)
+                response_schema = self._parse_return_type_to_schema(
+                    response_model_name, pydantic_models, imports, file_path
+                )
                 if response_schema:
                     metadata["response_model"] = response_schema
 
@@ -759,13 +778,14 @@ class FastAPIExtractor(BaseExtractor):
         # FastAPI already uses OpenAPI format
         return path
 
-    def _find_pydantic_models(self, tree, source_code: bytes) -> Dict[str, Schema]:
+    def _find_pydantic_models_with_aliases(self, tree, source_code: bytes, type_aliases: Dict[str, str]) -> Dict[str, Schema]:
         """
         Find all Pydantic BaseModel classes in the file.
 
         Args:
             tree: Tree-sitter Tree
             source_code: Source code bytes
+            type_aliases: Combined local + imported type aliases
 
         Returns:
             Dictionary mapping model names to Schema objects
@@ -811,7 +831,7 @@ class FastAPIExtractor(BaseExtractor):
             class_name = self.parser.get_node_text(class_name_node, source_code)
 
             # Parse fields from class body
-            schema = self._parse_pydantic_class_body(class_body_node, source_code)
+            schema = self._parse_pydantic_class_body(class_body_node, source_code, type_aliases)
 
             # Store parent class names for later inheritance resolution
             parent_names = []
@@ -829,7 +849,7 @@ class FastAPIExtractor(BaseExtractor):
         resolved_models = self._resolve_model_inheritance(models)
 
         # Expand nested model references in properties
-        expanded_models = self._expand_nested_models(resolved_models)
+        expanded_models = self._expand_nested_models(resolved_models, type_aliases)
 
         return expanded_models
 
@@ -867,6 +887,44 @@ class FastAPIExtractor(BaseExtractor):
 
             module_path = self.parser.get_node_text(module_name_node, source_code)
 
+            # Handle relative imports: from .schemas import X or from ..module import Y
+            if module_path.startswith("."):
+                # Convert relative to absolute module path
+                # e.g., from .schemas in polar/metrics/endpoints.py -> polar.metrics.schemas
+                try:
+                    current_dir = os.path.dirname(file_path)
+
+                    # Count leading dots (1 = same package, 2 = parent package, etc.)
+                    level = len(module_path) - len(module_path.lstrip("."))
+                    remaining = module_path.lstrip(".")
+
+                    # Start from current directory, go up (level-1) times
+                    # (level=1 means same dir, so go up 0 times)
+                    target_dir = current_dir
+                    for _ in range(level - 1):
+                        target_dir = os.path.dirname(target_dir)
+
+                    # Find package root by walking up until no __init__.py in parent
+                    package_root = target_dir
+                    while True:
+                        parent = os.path.dirname(package_root)
+                        if not os.path.exists(os.path.join(parent, "__init__.py")):
+                            break
+                        package_root = parent
+
+                    # Build module path from package_root to target_dir
+                    rel_path = os.path.relpath(target_dir, os.path.dirname(package_root))
+                    module_parts = rel_path.replace(os.sep, ".").split(".")
+
+                    # Append remaining part of relative import
+                    if remaining:
+                        module_parts.append(remaining)
+
+                    module_path = ".".join(module_parts)
+                except Exception:
+                    # Fallback: keep as-is if resolution fails
+                    pass
+
             # For multi-line imports with parentheses, tree-sitter puts import names
             # as direct children of import_from_statement, not under a single "name" field
             # Example: from x import (a, b, c) -> children are: from, module, import, (, a, ,, b, ,, c, )
@@ -900,6 +958,180 @@ class FastAPIExtractor(BaseExtractor):
 
         return imports
 
+    def _find_local_type_aliases(self, tree, source_code: bytes) -> Dict[str, str]:
+        """
+        Find type aliases defined in current file.
+
+        Args:
+            tree: Tree-sitter tree
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary mapping alias names to resolved type strings
+        """
+        type_aliases = {}
+
+        # Query for module-level assignments only (not inside functions/classes)
+        # This avoids processing thousands of local variables
+        query = """
+        (module
+          (expression_statement
+            (assignment
+              left: (identifier) @var_name
+              right: (_) @value)))
+        """
+        matches = self.parser.query(tree, query, "python")
+
+        count = 0
+        max_aliases = 100  # Safety limit
+        for match in matches:
+            if count >= max_aliases:
+                break
+            count += 1
+            var_name_node = match.get("var_name")
+            value_node = match.get("value")
+
+            if not var_name_node or not value_node:
+                continue
+
+            var_name = self.parser.get_node_text(var_name_node, source_code)
+
+            # Only consider capitalized names (type aliases convention)
+            if not var_name[0].isupper():
+                continue
+
+            value_text = self.parser.get_node_text(value_node, source_code)
+
+            # Unwrap Annotated[T, ...] → T
+            if value_text.startswith("Annotated["):
+                start = value_text.find("[") + 1
+                bracket_depth = 1
+                i = start
+                while i < len(value_text) and bracket_depth > 0:
+                    if value_text[i] == "[":
+                        bracket_depth += 1
+                    elif value_text[i] == "]":
+                        bracket_depth -= 1
+                    elif value_text[i] == "," and bracket_depth == 1:
+                        value_text = value_text[start:i].strip()
+                        break
+                    i += 1
+
+            # Unwrap SkipJsonSchema[T] → T
+            if value_text.startswith("SkipJsonSchema["):
+                start = value_text.find("[") + 1
+                end = value_text.rfind("]")
+                value_text = value_text[start:end].strip()
+
+            # For list[T] type aliases, store as-is
+            # The _parse_type_annotation will handle list[T] resolution
+            type_aliases[var_name] = value_text
+
+        return type_aliases
+
+    def _find_enum_classes(self, tree, source_code: bytes) -> Dict[str, str]:
+        """
+        Find enum classes and map to their base types.
+
+        Args:
+            tree: Tree-sitter tree
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary mapping enum class names to base type (string/integer)
+        """
+        enums = {}
+
+        # Query for class definitions
+        query = """
+        (class_definition
+          name: (identifier) @class_name
+          superclasses: (argument_list) @superclasses)
+        """
+        matches = self.parser.query(tree, query, "python")
+
+        for match in matches:
+            class_name_node = match.get("class_name")
+            superclasses_node = match.get("superclasses")
+
+            if not class_name_node or not superclasses_node:
+                continue
+
+            class_name = self.parser.get_node_text(class_name_node, source_code)
+            superclasses_text = self.parser.get_node_text(superclasses_node, source_code)
+
+            # Check for enum base classes
+            if "StrEnum" in superclasses_text:
+                enums[class_name] = "string"
+            elif "IntEnum" in superclasses_text:
+                enums[class_name] = "integer"
+            elif "Enum" in superclasses_text:
+                # Generic Enum - default to string (most common)
+                enums[class_name] = "string"
+
+        return enums
+
+    def _resolve_imported_type_aliases(
+        self, imports: Dict[str, str], current_file_path: str
+    ) -> Dict[str, str]:
+        """
+        Resolve imported type aliases to their underlying types.
+
+        Args:
+            imports: Dictionary mapping names to module paths
+            current_file_path: Path to current file
+
+        Returns:
+            Dictionary mapping alias names to resolved type strings
+        """
+        type_aliases = {}
+
+        # Limit processing to avoid performance issues
+        count = 0
+        max_imports = 50
+        for alias_name, module_path in imports.items():
+            if count >= max_imports:
+                break
+            count += 1
+
+            # Module path format: "module.Class" for imports
+            # For type aliases, strip last component to get module path
+            # e.g., "polar.organization.schemas.OrganizationID" → "polar.organization.schemas"
+            if "." in module_path:
+                # Strip last component (the imported name)
+                module_only = ".".join(module_path.split(".")[:-1])
+            else:
+                module_only = module_path
+
+            # Try to resolve module to file
+            file_path = self._resolve_module_to_file(module_only, current_file_path)
+            if not file_path:
+                continue
+
+            try:
+                source_code = self._read_file(file_path)
+                if not source_code:
+                    continue
+
+                # Parse source to check if it's an enum or type alias
+                tree = self.parser.parse_source(source_code, "python")
+                if tree:
+                    # Check if it's an enum class
+                    enums = self._find_enum_classes(tree, source_code)
+                    if alias_name in enums:
+                        type_aliases[alias_name] = enums[alias_name]
+                        continue
+
+                    # Try to resolve as type alias
+                    resolved_type = self._try_resolve_type_alias_inline(alias_name, source_code)
+                    if resolved_type:
+                        type_aliases[alias_name] = resolved_type
+
+            except Exception:
+                continue
+
+        return type_aliases
+
     def _resolve_imported_models(
         self, imports: Dict[str, str], current_file_path: str, depth: int = 0, visited: set = None
     ) -> Dict[str, Schema]:
@@ -926,8 +1158,15 @@ class FastAPIExtractor(BaseExtractor):
         models = {}
 
         for model_name, module_path in imports.items():
+            # Strip class name from module path to get file path
+            # e.g., "polar.metrics.schemas.MetricDashboardSchema" -> "polar.metrics.schemas"
+            if "." in module_path:
+                module_only = ".".join(module_path.split(".")[:-1])
+            else:
+                module_only = module_path
+
             # Try to resolve the module path to a file path
-            file_path = self._resolve_module_to_file(module_path, current_file_path)
+            file_path = self._resolve_module_to_file(module_only, current_file_path)
 
             if not file_path:
                 continue
@@ -949,7 +1188,13 @@ class FastAPIExtractor(BaseExtractor):
                     continue
 
                 # Find all Pydantic models in the imported file
-                imported_models = self._find_pydantic_models(tree, source_code)
+                # Get its local type aliases, enums, AND imported type aliases
+                imported_file_imports = self._extract_imports(tree, source_code, file_path)
+                imported_file_aliases = self._find_local_type_aliases(tree, source_code)
+                imported_file_enums = self._find_enum_classes(tree, source_code)
+                imported_file_imported_aliases = self._resolve_imported_type_aliases(imported_file_imports, file_path)
+                imported_file_type_aliases = {**imported_file_aliases, **imported_file_enums, **imported_file_imported_aliases}
+                imported_models = self._find_pydantic_models_with_aliases(tree, source_code, imported_file_type_aliases)
 
                 # Add the specific imported model if it exists
                 if model_name in imported_models:
@@ -1204,7 +1449,352 @@ class FastAPIExtractor(BaseExtractor):
 
         return resolved
 
-    def _expand_nested_models(self, models: Dict[str, Schema]) -> Dict[str, Schema]:
+    def _expand_schema_references(
+        self,
+        schema: Schema,
+        models: Dict[str, Schema],
+        type_aliases: Dict[str, str],
+        imports: Dict[str, str] = None,
+        file_path: str = None
+    ) -> Schema:
+        """
+        Expand references in single schema (for request/response bodies).
+
+        Args:
+            schema: Schema to expand
+            models: Available models
+            type_aliases: Type aliases mapping
+            imports: Import statements for lazy model resolution
+            file_path: Current file path for import resolution
+
+        Returns:
+            Expanded schema
+        """
+        if not isinstance(schema, Schema):
+            return schema
+
+        # Handle array-type schemas (e.g., list[Model])
+        if schema.type == "array" and schema.items:
+            items = schema.items
+            if isinstance(items, dict) and items.get("type") == "object":
+                if "description" in items and items["description"].startswith("Reference: "):
+                    model_name = items["description"].replace("Reference: ", "").strip()
+
+                    # Try type alias first
+                    if model_name in type_aliases:
+                        resolved_type = type_aliases[model_name]
+                        field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(resolved_type, type_aliases)
+                        resolved_items = {"type": field_type}
+                        if format_spec:
+                            resolved_items["format"] = format_spec
+                        if items_schema:
+                            resolved_items.update(items_schema)
+                        return Schema(
+                            type="array",
+                            items=resolved_items,
+                            required=schema.required if hasattr(schema, 'required') else None
+                        )
+
+                    # Try model
+                    if model_name in models:
+                        model_schema = models[model_name]
+                        # Keep model_schema as Schema object (not dict) so properties are accessible
+                        return Schema(
+                            type="array",
+                            items=model_schema if isinstance(model_schema, Schema) else model_schema,
+                            required=schema.required if hasattr(schema, 'required') else None
+                        )
+
+                    # Lazy resolution: try to resolve from imports
+                    if imports and file_path and model_name in imports:
+                        resolved_models = self._resolve_imported_models({model_name: imports[model_name]}, file_path)
+                        if model_name in resolved_models:
+                            model_schema = resolved_models[model_name]
+                            return Schema(
+                                type="array",
+                                items=model_schema if isinstance(model_schema, Schema) else model_schema,
+                                required=schema.required if hasattr(schema, 'required') else None
+                            )
+
+        # Handle object-type schemas with properties
+        if not schema.properties:
+            return schema
+
+        expanded_props = {}
+        for prop_name, prop_schema in schema.properties.items():
+            if isinstance(prop_schema, dict):
+                prop_type = prop_schema.get("type")
+
+                # Handle direct object reference
+                if prop_type == "object" and "description" in prop_schema:
+                    desc = prop_schema["description"]
+                    if desc.startswith("Reference: "):
+                        model_name = desc.replace("Reference: ", "").strip()
+
+                        # Try type alias first
+                        if model_name in type_aliases:
+                            resolved_type = type_aliases[model_name]
+                            field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(resolved_type)
+                            resolved_schema = {"type": field_type}
+                            if format_spec:
+                                resolved_schema["format"] = format_spec
+                            if items_schema:
+                                resolved_schema["items"] = items_schema
+                            expanded_props[prop_name] = resolved_schema
+                            continue
+
+                        # Try model
+                        if model_name in models:
+                            model_schema = models[model_name]
+                            schema_dict = model_schema.model_dump(exclude_none=True) if isinstance(model_schema, Schema) else model_schema
+                            expanded_props[prop_name] = schema_dict
+                            continue
+
+                # Handle array items
+                elif prop_type == "array" and "items" in prop_schema:
+                    items = prop_schema["items"]
+                    if isinstance(items, dict) and items.get("type") == "object":
+                        if "description" in items and items["description"].startswith("Reference: "):
+                            model_name = items["description"].replace("Reference: ", "").strip()
+
+                            # Try type alias first
+                            if model_name in type_aliases:
+                                resolved_type = type_aliases[model_name]
+                                field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(resolved_type)
+                                resolved_items = {"type": field_type}
+                                if format_spec:
+                                    resolved_items["format"] = format_spec
+                                if items_schema:
+                                    resolved_items.update(items_schema)
+                                expanded_props[prop_name] = {
+                                    "type": "array",
+                                    "items": resolved_items
+                                }
+                                continue
+
+                            # Try model
+                            if model_name in models:
+                                model_schema = models[model_name]
+                                items_dict = model_schema.model_dump(exclude_none=True) if isinstance(model_schema, Schema) else model_schema
+                                expanded_props[prop_name] = {
+                                    "type": "array",
+                                    "items": items_dict
+                                }
+                                continue
+
+            expanded_props[prop_name] = prop_schema
+
+        return Schema(
+            type=schema.type,
+            properties=expanded_props,
+            required=schema.required if hasattr(schema, 'required') else None
+        )
+
+    def _expand_nested_models_lazy(
+        self,
+        models: Dict[str, Schema],
+        local_type_aliases: Dict[str, str],
+        imports: Dict[str, str],
+        current_file_path: str
+    ) -> Dict[str, Schema]:
+        """
+        Expand nested models with on-demand import resolution.
+
+        Only resolves imported type aliases when actually referenced.
+
+        Args:
+            models: Dictionary of resolved models
+            local_type_aliases: Local type aliases in same file
+            imports: Import mapping for on-demand resolution
+            current_file_path: Current file path
+
+        Returns:
+            Models with expanded nested references
+        """
+        # Cache for resolved imports (lazy population)
+        resolved_imports_cache = {}
+
+        def resolve_type_alias_on_demand(alias_name: str) -> Optional[str]:
+            """Resolve type alias on-demand from local or imports."""
+            # Check local first
+            if alias_name in local_type_aliases:
+                return local_type_aliases[alias_name]
+
+            # Check cache
+            if alias_name in resolved_imports_cache:
+                return resolved_imports_cache[alias_name]
+
+            # Check if imported
+            if alias_name in imports:
+                module_path = imports[alias_name]
+                file_path = self._resolve_module_to_file(module_path, current_file_path)
+                if file_path:
+                    try:
+                        source_code = self._read_file(file_path)
+                        if source_code:
+                            # Check if it's an enum class
+                            tree = self.parser.parse_source(source_code, "python")
+                            if tree:
+                                enums = self._find_enum_classes(tree, source_code)
+                                if alias_name in enums:
+                                    resolved_imports_cache[alias_name] = enums[alias_name]
+                                    return enums[alias_name]
+
+                            # Try type alias
+                            resolved = self._try_resolve_type_alias_inline(alias_name, source_code)
+                            if resolved:
+                                resolved_imports_cache[alias_name] = resolved
+                                return resolved
+                    except Exception:
+                        pass
+
+            return None
+
+        def expand_schema(schema: Schema, visited: set = None) -> Schema:
+            """Recursively expand nested model refs."""
+            if visited is None:
+                visited = set()
+
+            if not isinstance(schema, Schema) or not schema.properties:
+                return schema
+
+            expanded_props = {}
+            for prop_name, prop_schema in schema.properties.items():
+                if isinstance(prop_schema, dict):
+                    prop_type = prop_schema.get("type")
+
+                    # Handle direct object reference
+                    if prop_type == "object" and "description" in prop_schema:
+                        desc = prop_schema["description"]
+                        if desc.startswith("Reference: "):
+                            model_name = desc.replace("Reference: ", "").strip()
+
+                            # Try to resolve as type alias (on-demand)
+                            resolved_type = resolve_type_alias_on_demand(model_name)
+                            if resolved_type:
+                                # Parse resolved type to get proper schema
+                                field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(resolved_type)
+                                resolved_schema = {"type": field_type}
+                                if format_spec:
+                                    resolved_schema["format"] = format_spec
+                                if items_schema:
+                                    resolved_schema["items"] = items_schema
+                                expanded_props[prop_name] = resolved_schema
+                                continue
+
+                            # Try as model
+                            if model_name in models and model_name not in visited:
+                                visited.add(model_name)
+                                expanded_schema = expand_schema(models[model_name], visited.copy())
+                                schema_dict = expanded_schema.model_dump(exclude_none=True) if isinstance(expanded_schema, Schema) else expanded_schema
+                                expanded_props[prop_name] = schema_dict
+                                continue
+
+                            # Try to import model on-demand
+                            if model_name in imports and model_name not in visited:
+                                module_path = imports[model_name]
+                                file_path = self._resolve_module_to_file(module_path, current_file_path)
+                                if file_path:
+                                    try:
+                                        source_code = self._read_file(file_path)
+                                        if source_code:
+                                            tree = self.parser.parse_source(source_code, "python")
+                                            if tree:
+                                                # Get type aliases + enums for imported file (including its imports)
+                                                imported_file_imports = self._extract_imports(tree, source_code, file_path)
+                                                imported_aliases = self._find_local_type_aliases(tree, source_code)
+                                                imported_enums = self._find_enum_classes(tree, source_code)
+                                                imported_from_imports = self._resolve_imported_type_aliases(imported_file_imports, file_path)
+                                                imported_type_aliases = {**imported_aliases, **imported_enums, **imported_from_imports}
+                                                imported_models = self._find_pydantic_models_with_aliases(tree, source_code, imported_type_aliases)
+
+                                                if model_name in imported_models:
+                                                    visited.add(model_name)
+                                                    expanded_schema = expand_schema(imported_models[model_name], visited.copy())
+                                                    schema_dict = expanded_schema.model_dump(exclude_none=True) if isinstance(expanded_schema, Schema) else expanded_schema
+                                                    expanded_props[prop_name] = schema_dict
+                                                    continue
+                                    except Exception:
+                                        pass
+
+                    # Handle array with object items
+                    elif prop_type == "array" and "items" in prop_schema:
+                        items = prop_schema["items"]
+                        if isinstance(items, dict) and items.get("type") == "object":
+                            if "description" in items and items["description"].startswith("Reference: "):
+                                model_name = items["description"].replace("Reference: ", "").strip()
+
+                                # Try to resolve as type alias (on-demand)
+                                resolved_type = resolve_type_alias_on_demand(model_name)
+                                if resolved_type:
+                                    field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(resolved_type)
+                                    resolved_items = {"type": field_type}
+                                    if format_spec:
+                                        resolved_items["format"] = format_spec
+                                    if items_schema:
+                                        resolved_items.update(items_schema)
+                                    expanded_props[prop_name] = {
+                                        "type": "array",
+                                        "items": resolved_items
+                                    }
+                                    continue
+
+                                # Try as model
+                                if model_name in models and model_name not in visited:
+                                    visited.add(model_name)
+                                    expanded_items = expand_schema(models[model_name], visited.copy())
+                                    items_dict = expanded_items.model_dump(exclude_none=True) if isinstance(expanded_items, Schema) else expanded_items
+                                    expanded_props[prop_name] = {
+                                        "type": "array",
+                                        "items": items_dict
+                                    }
+                                    continue
+
+                                # Try to import model on-demand
+                                if model_name in imports and model_name not in visited:
+                                    module_path = imports[model_name]
+                                    file_path = self._resolve_module_to_file(module_path, current_file_path)
+                                    if file_path:
+                                        try:
+                                            source_code = self._read_file(file_path)
+                                            if source_code:
+                                                tree = self.parser.parse_source(source_code, "python")
+                                                if tree:
+                                                    imported_file_imports = self._extract_imports(tree, source_code, file_path)
+                                                    imported_aliases = self._find_local_type_aliases(tree, source_code)
+                                                    imported_enums = self._find_enum_classes(tree, source_code)
+                                                    imported_from_imports = self._resolve_imported_type_aliases(imported_file_imports, file_path)
+                                                    imported_type_aliases = {**imported_aliases, **imported_enums, **imported_from_imports}
+                                                    imported_models = self._find_pydantic_models_with_aliases(tree, source_code, imported_type_aliases)
+
+                                                    if model_name in imported_models:
+                                                        visited.add(model_name)
+                                                        expanded_items = expand_schema(imported_models[model_name], visited.copy())
+                                                        items_dict = expanded_items.model_dump(exclude_none=True) if isinstance(expanded_items, Schema) else expanded_items
+                                                        expanded_props[prop_name] = {
+                                                            "type": "array",
+                                                            "items": items_dict
+                                                        }
+                                                        continue
+                                        except Exception:
+                                            pass
+
+                expanded_props[prop_name] = prop_schema
+
+            return Schema(
+                type=schema.type,
+                properties=expanded_props,
+                required=schema.required if hasattr(schema, 'required') else None
+            )
+
+        # Expand all models
+        expanded = {}
+        for name, schema in models.items():
+            expanded[name] = expand_schema(schema, set())
+
+        return expanded
+
+    def _expand_nested_models(self, models: Dict[str, Schema], type_aliases: Dict[str, str] = None) -> Dict[str, Schema]:
         """
         Expand nested model references in property schemas.
 
@@ -1213,10 +1803,13 @@ class FastAPIExtractor(BaseExtractor):
 
         Args:
             models: Dictionary of resolved models
+            type_aliases: Dictionary mapping alias names to resolved types
 
         Returns:
             Models with expanded nested references
         """
+        if type_aliases is None:
+            type_aliases = {}
         def expand_schema(schema: Schema, visited: set = None) -> Schema:
             """Recursively expand nested model refs."""
             if visited is None:
@@ -1236,6 +1829,21 @@ class FastAPIExtractor(BaseExtractor):
                         # Check for "Reference: ModelName" pattern
                         if desc.startswith("Reference: "):
                             model_name = desc.replace("Reference: ", "").strip()
+
+                            # Try to resolve as type alias first
+                            if model_name in type_aliases:
+                                # Resolve alias and re-parse
+                                resolved_type = type_aliases[model_name]
+                                # Parse resolved type to get proper schema
+                                field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(resolved_type)
+                                resolved_schema = {"type": field_type}
+                                if format_spec:
+                                    resolved_schema["format"] = format_spec
+                                if items_schema:
+                                    resolved_schema["items"] = items_schema
+                                expanded_props[prop_name] = resolved_schema
+                                continue
+
                             if model_name in models and model_name not in visited:
                                 # Expand nested model
                                 visited.add(model_name)
@@ -1252,6 +1860,22 @@ class FastAPIExtractor(BaseExtractor):
                             # Check items description for model reference
                             if "description" in items and items["description"].startswith("Reference: "):
                                 model_name = items["description"].replace("Reference: ", "").strip()
+
+                                # Try to resolve as type alias first
+                                if model_name in type_aliases:
+                                    resolved_type = type_aliases[model_name]
+                                    field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(resolved_type)
+                                    resolved_items = {"type": field_type}
+                                    if format_spec:
+                                        resolved_items["format"] = format_spec
+                                    if items_schema:
+                                        resolved_items.update(items_schema)
+                                    expanded_props[prop_name] = {
+                                        "type": "array",
+                                        "items": resolved_items
+                                    }
+                                    continue
+
                                 if model_name in models and model_name not in visited:
                                     visited.add(model_name)
                                     expanded_items = expand_schema(models[model_name], visited.copy())
@@ -1314,13 +1938,14 @@ class FastAPIExtractor(BaseExtractor):
 
         return model_names
 
-    def _parse_pydantic_class_body(self, class_body_node: Node, source_code: bytes) -> Schema:
+    def _parse_pydantic_class_body(self, class_body_node: Node, source_code: bytes, type_aliases: Dict[str, str] = None) -> Schema:
         """
         Parse Pydantic model fields from class body.
 
         Args:
             class_body_node: Class body node
             source_code: Source code bytes
+            type_aliases: Optional dict of type aliases for resolution
 
         Returns:
             Schema object
@@ -1334,7 +1959,7 @@ class FastAPIExtractor(BaseExtractor):
                 # Check if it's a typed assignment
                 for expr_child in child.children:
                     if expr_child.type == "assignment":
-                        field_info = self._parse_pydantic_field(expr_child, source_code)
+                        field_info = self._parse_pydantic_field(expr_child, source_code, type_aliases)
                         if field_info:
                             name, field_schema, is_required = field_info
                             properties[name] = field_schema
@@ -1342,7 +1967,7 @@ class FastAPIExtractor(BaseExtractor):
                                 required.append(name)
                     elif expr_child.type == "type_alias_statement":
                         # Handle: name: str (no default value)
-                        field_info = self._parse_type_alias(expr_child, source_code)
+                        field_info = self._parse_type_alias(expr_child, source_code, type_aliases)
                         if field_info:
                             name, field_schema, is_required = field_info
                             properties[name] = field_schema
@@ -1356,7 +1981,7 @@ class FastAPIExtractor(BaseExtractor):
         )
 
     def _parse_pydantic_field(
-        self, assignment_node: Node, source_code: bytes
+        self, assignment_node: Node, source_code: bytes, type_aliases: Dict[str, str] = None
     ) -> Optional[tuple]:
         """
         Parse a Pydantic field definition.
@@ -1364,6 +1989,7 @@ class FastAPIExtractor(BaseExtractor):
         Args:
             assignment_node: Assignment node
             source_code: Source code bytes
+            type_aliases: Optional dict of type aliases for resolution
 
         Returns:
             Tuple of (field_name, field_schema_dict, is_required) or None
@@ -1381,7 +2007,21 @@ class FastAPIExtractor(BaseExtractor):
             return None
 
         type_text = self.parser.get_node_text(type_node, source_code)
-        field_type, is_optional, items_schema = self._parse_type_annotation(type_text)
+
+        # Try to resolve type alias in same file (e.g., OrganizationID = Annotated[UUID4, ...])
+        # Do this before parsing so _parse_type_annotation sees the resolved type
+        resolved_type = self._try_resolve_type_alias_inline(type_text, source_code)
+        if resolved_type:
+            type_text = resolved_type
+            # Recursively resolve if still a type alias
+            max_depth = 5
+            for _ in range(max_depth):
+                next_resolved = self._try_resolve_type_alias_inline(type_text, source_code)
+                if not next_resolved or next_resolved == type_text:
+                    break
+                type_text = next_resolved
+
+        field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(type_text, type_aliases)
 
         # Check if there's a default value
         right = assignment_node.child_by_field_name("right")
@@ -1391,6 +2031,8 @@ class FastAPIExtractor(BaseExtractor):
         is_required = not is_optional and not has_default
 
         field_schema = {"type": field_type}
+        if format_spec:
+            field_schema["format"] = format_spec
         if items_schema:
             field_schema["items"] = items_schema
 
@@ -1407,13 +2049,95 @@ class FastAPIExtractor(BaseExtractor):
 
         return (field_name, field_schema, is_required)
 
-    def _parse_type_alias(self, type_alias_node: Node, source_code: bytes) -> Optional[tuple]:
+    def _try_resolve_type_alias_inline(self, type_text: str, source_code: bytes) -> Optional[str]:
+        """
+        Try to resolve type alias by finding its definition in same file.
+
+        Example:
+          OrganizationID = Annotated[UUID4, ...]
+          If type_text == "OrganizationID", returns "UUID4"
+
+        Args:
+            type_text: Type annotation text (e.g., "OrganizationID")
+            source_code: Source code of current file
+
+        Returns:
+            Resolved innermost type or None
+        """
+        # Skip if already a known builtin or contains brackets (already resolved)
+        if "[" in type_text or type_text in ("str", "int", "float", "bool", "dict", "list"):
+            return None
+
+        # Extract base type name
+        type_name = type_text.strip()
+        if "|" in type_name:
+            parts = [p.strip() for p in type_name.split("|") if p.strip() != "None"]
+            type_name = parts[0] if parts else type_name
+
+        # Parse source to find assignment
+        try:
+            tree = self.parser.parse_source(source_code, "python")
+            if not tree:
+                return None
+
+            # Query for assignment: TypeName = ...
+            query = """
+            (assignment
+              left: (identifier) @var_name
+              right: (_) @value)
+            """
+            matches = self.parser.query(tree, query, "python")
+
+            for match in matches:
+                var_name_node = match.get("var_name")
+                value_node = match.get("value")
+
+                if not var_name_node or not value_node:
+                    continue
+
+                var_name = self.parser.get_node_text(var_name_node, source_code)
+
+                if var_name == type_name:
+                    # Found type alias assignment - extract value
+                    value_text = self.parser.get_node_text(value_node, source_code)
+
+                    # Unwrap Annotated[T, ...] → T
+                    if value_text.startswith("Annotated["):
+                        # Extract first type argument
+                        start = value_text.find("[") + 1
+                        bracket_depth = 1
+                        i = start
+                        while i < len(value_text) and bracket_depth > 0:
+                            if value_text[i] == "[":
+                                bracket_depth += 1
+                            elif value_text[i] == "]":
+                                bracket_depth -= 1
+                            elif value_text[i] == "," and bracket_depth == 1:
+                                value_text = value_text[start:i].strip()
+                                break
+                            i += 1
+
+                    # Unwrap SkipJsonSchema[T] → T
+                    if value_text.startswith("SkipJsonSchema["):
+                        start = value_text.find("[") + 1
+                        end = value_text.rfind("]")
+                        value_text = value_text[start:end].strip()
+
+                    return value_text
+
+        except Exception:
+            pass
+
+        return None
+
+    def _parse_type_alias(self, type_alias_node: Node, source_code: bytes, type_aliases: Dict[str, str] = None) -> Optional[tuple]:
         """
         Parse a type alias statement (field without default value).
 
         Args:
             type_alias_node: Type alias node
             source_code: Source code bytes
+            type_aliases: Optional dict of type aliases for resolution
 
         Returns:
             Tuple of (field_name, field_schema_dict, is_required) or None
@@ -1427,12 +2151,26 @@ class FastAPIExtractor(BaseExtractor):
         field_name = self.parser.get_node_text(field_name_node, source_code)
         type_text = self.parser.get_node_text(type_node, source_code)
 
-        field_type, is_optional, items_schema = self._parse_type_annotation(type_text)
+        # Try to resolve type alias
+        resolved_type = self._try_resolve_type_alias_inline(type_text, source_code)
+        if resolved_type:
+            type_text = resolved_type
+            # Recursively resolve if still a type alias
+            max_depth = 5
+            for _ in range(max_depth):
+                next_resolved = self._try_resolve_type_alias_inline(type_text, source_code)
+                if not next_resolved or next_resolved == type_text:
+                    break
+                type_text = next_resolved
+
+        field_type, is_optional, items_schema, format_spec = self._parse_type_annotation(type_text, type_aliases)
 
         # No default value, so required unless Optional
         is_required = not is_optional
 
         field_schema = {"type": field_type}
+        if format_spec:
+            field_schema["format"] = format_spec
         if items_schema:
             field_schema["items"] = items_schema
 
@@ -1448,16 +2186,18 @@ class FastAPIExtractor(BaseExtractor):
 
         return (field_name, field_schema, is_required)
 
-    def _parse_type_annotation(self, type_text: str) -> tuple:
+    def _parse_type_annotation(self, type_text: str, type_aliases: Dict[str, str] = None) -> tuple:
         """
         Parse Python type annotation to OpenAPI type.
 
         Args:
             type_text: Type annotation text
+            type_aliases: Optional dict of type aliases to resolve before falling back to object
 
         Returns:
-            Tuple of (openapi_type, is_optional, items_schema)
+            Tuple of (openapi_type, is_optional, items_schema, format_spec)
             items_schema is dict for array items or None
+            format_spec is format string or None
         """
         import re
 
@@ -1476,6 +2216,42 @@ class FastAPIExtractor(BaseExtractor):
         else:
             base_type = type_text.strip()
 
+        # Unwrap Annotated[T, ...] and SkipJsonSchema[T] patterns
+        # Annotated[UUID4, ...] → UUID4
+        # SkipJsonSchema[str] → str
+        if base_type.startswith("Annotated["):
+            # Extract first type argument
+            start = base_type.find("[") + 1
+            # Find matching bracket, accounting for nested brackets
+            bracket_depth = 1
+            i = start
+            while i < len(base_type) and bracket_depth > 0:
+                if base_type[i] == "[":
+                    bracket_depth += 1
+                elif base_type[i] == "]":
+                    bracket_depth -= 1
+                elif base_type[i] == "," and bracket_depth == 1:
+                    # Found first comma at top level
+                    base_type = base_type[start:i].strip()
+                    break
+                i += 1
+        elif base_type.startswith("SkipJsonSchema["):
+            # Extract inner type
+            start = base_type.find("[") + 1
+            end = base_type.rfind("]")
+            base_type = base_type[start:end].strip()
+
+        # Handle Union types after unwrapping: A | B
+        # Parse first variant only (simplification - full oneOf support needs more work)
+        if "|" in base_type:
+            # Split on | and take first non-None variant
+            parts = [p.strip() for p in base_type.split("|")]
+            # Filter out None, take first variant
+            variants = [p for p in parts if p != "None"]
+            if variants:
+                # Recursively parse first variant
+                return self._parse_type_annotation(variants[0], type_aliases)
+
         # Map Python types to OpenAPI types
         type_map = {
             "str": "string",
@@ -1486,32 +2262,88 @@ class FastAPIExtractor(BaseExtractor):
             "List": "array",
             "dict": "object",
             "Dict": "object",
+            # Pydantic types with format
+            "UUID4": ("string", "uuid"),
+            "UUID": ("string", "uuid"),
+            "EmailStr": ("string", "email"),
+            "EmailStrDNS": ("string", "email"),
+            "HttpUrl": ("string", "uri"),
+            "AnyHttpUrl": ("string", "uri"),
+            "AnyUrl": ("string", "uri"),
+            "datetime": ("string", "date-time"),
+            "date": ("string", "date"),
+            "time": ("string", "time"),
+            "Decimal": ("number", None),
+            "IPvAnyAddress": ("string", "ipvanyaddress"),
+            # Common type aliases
+            "StrEnum": ("string", None),
+            "IntEnum": ("integer", None),
         }
 
         # Check for List[T] pattern and extract inner type
         list_match = re.match(r'(?:list|List)\[(.+)\]', base_type)
         if list_match:
             inner_type = list_match.group(1).strip()
+
+            # Unwrap SkipJsonSchema[T] in array items
+            if inner_type.startswith("SkipJsonSchema["):
+                start = inner_type.find("[") + 1
+                end = inner_type.rfind("]")
+                inner_type = inner_type[start:end].strip()
+
+            # Check type_aliases first (for enums, type aliases)
+            if type_aliases and inner_type in type_aliases:
+                resolved_inner = type_aliases[inner_type]
+                # Recursively parse resolved inner type
+                inner_openapi_type, _, _, inner_format = self._parse_type_annotation(resolved_inner, type_aliases)
+                items_schema = {"type": inner_openapi_type}
+                if inner_format:
+                    items_schema["format"] = inner_format
+                return ("array", is_optional, items_schema, None)
+
             # Map inner type to OpenAPI type
-            inner_openapi = type_map.get(inner_type)
-            if inner_openapi:
-                items_schema = {"type": inner_openapi}
+            inner_mapping = type_map.get(inner_type)
+            if inner_mapping:
+                if isinstance(inner_mapping, tuple):
+                    inner_openapi, inner_format = inner_mapping
+                    items_schema = {"type": inner_openapi}
+                    if inner_format:
+                        items_schema["format"] = inner_format
+                else:
+                    items_schema = {"type": inner_mapping}
             else:
                 # Likely a model reference (e.g., list[MetricsPeriod])
                 items_schema = {"type": "object", "description": f"Reference: {inner_type}"}
-            return ("array", is_optional, items_schema)
+            return ("array", is_optional, items_schema, None)
+
+        # Check for Literal types: Literal["a", "b"] -> string with enum
+        if base_type.startswith("Literal["):
+            # Map to string type (simplification - could infer type from values)
+            return ("string", is_optional, None, None)
 
         # Check if base type is a known type or model reference
-        openapi_type = type_map.get(base_type)
-        if openapi_type:
-            return (openapi_type, is_optional, None)
+        type_mapping = type_map.get(base_type)
+        if type_mapping:
+            if isinstance(type_mapping, tuple):
+                # Type with format specification (e.g., UUID4 -> ("string", "uuid"))
+                openapi_type, format_spec = type_mapping
+                return (openapi_type, is_optional, None, format_spec)
+            else:
+                # Simple type mapping (e.g., str -> "string")
+                return (type_mapping, is_optional, None, None)
 
         # Unknown type - check if it looks like a model name (starts with uppercase)
         if base_type and base_type[0].isupper():
-            # Store as object reference for later expansion
-            return ("object", is_optional, None)
+            # Check type_aliases first
+            if type_aliases and base_type in type_aliases:
+                resolved = type_aliases[base_type]
+                # Recursively parse resolved type
+                return self._parse_type_annotation(resolved, type_aliases)
 
-        return ("string", is_optional, None)
+            # Store as object reference for later expansion
+            return ("object", is_optional, None, None)
+
+        return ("string", is_optional, None, None)
 
     def _extract_response_model(
         self, args_node: Node, source_code: bytes
@@ -1732,7 +2564,7 @@ class FastAPIExtractor(BaseExtractor):
         Returns:
             Parameter object
         """
-        param_type, _, _ = self._parse_type_annotation(type_text)
+        param_type, _, _, _ = self._parse_type_annotation(type_text)
 
         # Extract description from Query(..., description="...")
         description = None
@@ -1770,7 +2602,7 @@ class FastAPIExtractor(BaseExtractor):
         Returns:
             Parameter object
         """
-        param_type, _, _ = self._parse_type_annotation(type_text)
+        param_type, _, _, _ = self._parse_type_annotation(type_text)
 
         # Extract description from Header(..., description="...")
         description = None
@@ -1795,7 +2627,8 @@ class FastAPIExtractor(BaseExtractor):
         )
 
     def _parse_return_type_to_schema(
-        self, return_type: str, pydantic_models: Dict[str, Schema]
+        self, return_type: str, pydantic_models: Dict[str, Schema],
+        imports: Dict[str, str] = None, file_path: str = None
     ) -> Optional[Schema]:
         """
         Parse return type annotation to Schema.
@@ -1809,6 +2642,8 @@ class FastAPIExtractor(BaseExtractor):
         Args:
             return_type: Return type annotation string
             pydantic_models: Available Pydantic models
+            imports: Import statements for lazy model resolution
+            file_path: Current file path for import resolution
 
         Returns:
             Schema object or None
@@ -1829,7 +2664,17 @@ class FastAPIExtractor(BaseExtractor):
                     type="array",
                     items=pydantic_models[inner_type],
                 )
-            else:
+            # Lazy resolution: try to resolve from imports
+            elif imports and file_path and inner_type in imports:
+                resolved_models = self._resolve_imported_models({inner_type: imports[inner_type]}, file_path)
+                if inner_type in resolved_models:
+                    return Schema(
+                        type="array",
+                        items=resolved_models[inner_type],
+                    )
+
+            # Fallback
+            if inner_type not in pydantic_models:
                 # Try basic type mapping
                 type_map = {
                     "str": "string",
@@ -1895,8 +2740,17 @@ class FastAPIExtractor(BaseExtractor):
             if "header_params" in route.metadata:
                 parameters.extend(route.metadata["header_params"])
 
-            # Get request body from metadata
+            # Get pydantic models and type aliases from metadata for expansion
+            pydantic_models = route.metadata.get("pydantic_models", {})
+            type_aliases = route.metadata.get("type_aliases", {})
+            imports = route.metadata.get("imports", {})
+
+            # Get request body from metadata and expand references
             request_body = route.metadata.get("request_body")
+            if request_body:
+                request_body = self._expand_schema_references(
+                    request_body, pydantic_models, type_aliases, imports, route.source_file
+                )
 
             # Build responses list
             responses = []
@@ -1910,9 +2764,16 @@ class FastAPIExtractor(BaseExtractor):
             # Only use return type annotation if NO response_model was specified in decorator
             elif "return_type" in route.metadata and not route.metadata.get("response_model_specified"):
                 return_type = route.metadata["return_type"]
-                pydantic_models = route.metadata.get("pydantic_models", {})
                 # Parse return type to proper schema
-                response_schema = self._parse_return_type_to_schema(return_type, pydantic_models)
+                response_schema = self._parse_return_type_to_schema(
+                    return_type, pydantic_models, imports, route.source_file
+                )
+
+            # Expand response schema references
+            if response_schema:
+                response_schema = self._expand_schema_references(
+                    response_schema, pydantic_models, type_aliases, imports, route.source_file
+                )
 
             # Add 200 response
             if response_schema:
