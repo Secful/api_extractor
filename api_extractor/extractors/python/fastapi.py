@@ -638,7 +638,7 @@ class FastAPIExtractor(BaseExtractor):
             metadata = {}
             if func_def_node:
                 params_metadata = self._extract_function_parameters(
-                    func_def_node, source_code, pydantic_models
+                    func_def_node, source_code, pydantic_models, imports, file_path
                 )
                 metadata.update(params_metadata)
 
@@ -2440,7 +2440,8 @@ class FastAPIExtractor(BaseExtractor):
         return responses
 
     def _extract_function_parameters(
-        self, func_def_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema]
+        self, func_def_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema],
+        imports: Dict[str, str] = None, file_path: str = None
     ) -> Dict[str, Any]:
         """
         Extract function parameters to identify request body and query/header params.
@@ -2450,6 +2451,8 @@ class FastAPIExtractor(BaseExtractor):
             func_def_node: Function definition node
             source_code: Source code bytes
             pydantic_models: Dictionary of Pydantic models
+            imports: Import statements for lazy model resolution
+            file_path: Current file path for import resolution
 
         Returns:
             Dictionary with request_body, query_params, header_params, return_type
@@ -2463,7 +2466,9 @@ class FastAPIExtractor(BaseExtractor):
         if params_node:
             for param in params_node.children:
                 if param.type in ("typed_parameter", "typed_default_parameter"):
-                    param_info = self._analyze_parameter(param, source_code, pydantic_models)
+                    param_info = self._analyze_parameter(
+                        param, source_code, pydantic_models, imports, file_path
+                    )
                     if param_info:
                         param_type, param_data = param_info
                         if param_type == "body":
@@ -2488,7 +2493,8 @@ class FastAPIExtractor(BaseExtractor):
         return metadata
 
     def _analyze_parameter(
-        self, param_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema]
+        self, param_node: Node, source_code: bytes, pydantic_models: Dict[str, Schema],
+        imports: Dict[str, str] = None, file_path: str = None
     ) -> Optional[tuple]:
         """
         Analyze a function parameter to determine its type.
@@ -2497,6 +2503,8 @@ class FastAPIExtractor(BaseExtractor):
             param_node: Parameter node
             source_code: Source code bytes
             pydantic_models: Dictionary of Pydantic models
+            imports: Import statements for lazy model resolution
+            file_path: Current file path for import resolution
 
         Returns:
             Tuple of (param_type, param_data) or None
@@ -2521,6 +2529,12 @@ class FastAPIExtractor(BaseExtractor):
         # Check if type is a Pydantic model (request body)
         if type_text in pydantic_models:
             return ("body", pydantic_models[type_text])
+
+        # Lazy resolution: try to resolve from imports
+        if imports and file_path and type_text in imports:
+            resolved_models = self._resolve_imported_models({type_text: imports[type_text]}, file_path)
+            if type_text in resolved_models:
+                return ("body", resolved_models[type_text])
 
         # Check for Query/Header default values
         if param_node.type == "typed_default_parameter":
