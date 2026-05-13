@@ -127,6 +127,13 @@ class PathItem(BaseModel):
     parameters: Optional[List[ParameterObject]] = None
 
 
+class Tag(BaseModel):
+    """Tag object."""
+
+    name: str
+    description: Optional[str] = None
+
+
 class OpenAPISpec(BaseModel):
     """OpenAPI 3.1 Specification."""
 
@@ -138,3 +145,4 @@ class OpenAPISpec(BaseModel):
     paths: Dict[str, PathItem] = Field(default_factory=dict)
     components: Optional[Dict[str, Any]] = None
     security: Optional[List[Dict[str, List[str]]]] = None
+    tags: Optional[List[Tag]] = None

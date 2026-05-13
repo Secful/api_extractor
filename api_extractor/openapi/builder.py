@@ -12,6 +12,7 @@ from api_extractor.openapi.models import (
     Response,
     MediaType,
     RequestBody,
+    Tag,
 )
 
 
@@ -52,12 +53,19 @@ class OpenAPIBuilder:
         # Collect all schemas for components section
         self.collected_schemas: Dict[str, Schema] = {}
 
+        # Collect unique tags
+        all_tags = set()
+
         for endpoint in endpoints:
             path = endpoint.path
             method = endpoint.method.value.lower()
 
             # Convert endpoint to operation
             operation = self._endpoint_to_operation(endpoint)
+
+            # Collect tags
+            if endpoint.tags:
+                all_tags.update(endpoint.tags)
 
             # Add to paths
             if path not in paths:
@@ -74,6 +82,9 @@ class OpenAPIBuilder:
         if self.collected_schemas:
             components = {"schemas": self._build_schemas_dict()}
 
+        # Build tags list
+        tags = [Tag(name=tag_name) for tag_name in sorted(all_tags)] if all_tags else None
+
         # Build specification
         spec = OpenAPISpec(
             openapi="3.1.0",
@@ -85,6 +96,7 @@ class OpenAPIBuilder:
             servers=[],
             paths=path_items,
             components=components,
+            tags=tags,
         )
 
         return spec
@@ -132,6 +144,7 @@ class OpenAPIBuilder:
             "parameters": parameters if parameters else None,
             "request_body": request_body,
             "responses": responses,
+            "tags": endpoint.tags if endpoint.tags else None,
         }
 
         # Add api_extractor extension fields (x-api-extractor-*)
