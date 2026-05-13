@@ -62,6 +62,10 @@ class NestJSExtractor(BaseExtractor):
         if not tree:
             return routes
 
+        # Set context for type resolution (used by property parsers)
+        self._current_file = file_path
+        self._current_imports = self._extract_imports(tree, source_code)
+
         # First, find all DTO classes
         dto_classes = self._find_dto_classes(tree, source_code)
 
@@ -1662,8 +1666,13 @@ class NestJSExtractor(BaseExtractor):
             if type_text == "Date":
                 return {"type": "string", "format": "date-time"}
 
+            # Try to resolve as enum if we have context
+            if hasattr(self, '_current_file') and hasattr(self, '_current_imports'):
+                enum_schema = self._try_resolve_enum(type_text)
+                if enum_schema:
+                    return enum_schema
+
             # For other types, mark as object for now
-            # TODO: Could resolve enums, custom types, etc.
             return {"type": "object"}
 
         # Handle generic types: Array<T>, Promise<T>, etc.
@@ -1921,30 +1930,61 @@ class NestJSExtractor(BaseExtractor):
             if child.type in ("{", "}", ","):
                 continue
 
-            # Property identifier is the enum member
-            if child.type == "property_identifier":
-                # Check if it has an initializer (= 'VALUE')
-                next_idx = body_node.children.index(child) + 1
-                if next_idx < len(body_node.children):
-                    next_node = body_node.children[next_idx]
-                    # Check for assignment
-                    if self.parser.get_node_text(next_node, source_code) == "=":
-                        # Get value node (next after =)
-                        value_idx = next_idx + 1
-                        if value_idx < len(body_node.children):
-                            value_node = body_node.children[value_idx]
-                            # Extract string value
-                            if value_node.type == "string":
-                                value = self.parser.extract_string_value(value_node, source_code)
-                                enum_values.append(value)
-                                continue
-                            # Numeric or computed values - use member name
-                            member_name = self.parser.get_node_text(child, source_code)
-                            enum_values.append(member_name)
-                            continue
+            # Handle enum_assignment node (MEMBER = 'value')
+            if child.type == "enum_assignment":
+                # Parse the enum_assignment which contains name and value
+                # Structure: (property_identifier) = (string|number)
+                name_node = None
+                value_node = None
 
-                # No initializer - use member name as value
+                for subchild in child.children:
+                    if subchild.type == "property_identifier":
+                        name_node = subchild
+                    elif subchild.type == "string":
+                        value_node = subchild
+                    elif subchild.type == "number":
+                        value_node = subchild
+
+                if value_node and value_node.type == "string":
+                    # Extract string value
+                    value = self.parser.extract_string_value(value_node, source_code)
+                    enum_values.append(value)
+                elif name_node:
+                    # No string value or numeric - use member name
+                    member_name = self.parser.get_node_text(name_node, source_code)
+                    enum_values.append(member_name)
+
+            # Property identifier (for enums without assignments)
+            elif child.type == "property_identifier":
                 member_name = self.parser.get_node_text(child, source_code)
                 enum_values.append(member_name)
 
         return enum_values
+
+    def _try_resolve_enum(self, type_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Try to resolve a type name to an enum schema.
+
+        Uses instance vars _current_file and _current_imports set by caller.
+
+        Args:
+            type_name: Type identifier name
+
+        Returns:
+            Enum schema dict or None
+        """
+        # Check if type is imported
+        if type_name in self._current_imports:
+            import_path = self._current_imports[type_name]
+            resolved_path = self._resolve_import_path(import_path, self._current_file)
+            if resolved_path:
+                schema = self._parse_type_definition(type_name, resolved_path)
+                if schema and schema.enum:
+                    return {"type": "string", "enum": schema.enum}
+
+        # Check in current file
+        schema = self._parse_type_definition(type_name, self._current_file)
+        if schema and schema.enum:
+            return {"type": "string", "enum": schema.enum}
+
+        return None
