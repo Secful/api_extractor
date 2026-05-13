@@ -117,10 +117,11 @@ class TestInboxZero:
             if ep.responses and any(r.response_schema for r in ep.responses)
         ]
         # 1 endpoint uses NextResponse.json<Type>() pattern
-        # 25 endpoints use inline objects with literal values: NextResponse.json({ status: "ok" })
+        # 41 endpoints use inline objects with literal values: NextResponse.json({ status: "ok" })
+        # Improved inline object detection now extracts more response schemas
         # Filtered out: error-only responses ({error: string}) from wrapped handlers
         # Not extracted: responses with dynamic values (variables, function calls)
-        assert len(with_response_schema) == 26
+        assert len(with_response_schema) == 42
 
         # Verify typed generic response (NextResponse.json<T>)
         typed_endpoint = next(
@@ -137,7 +138,7 @@ class TestInboxZero:
             ep for ep in with_response_schema
             if ep.path != "/api/mcp/{integration}/auth-url"
         ]
-        assert len(inline_endpoints) == 25
+        assert len(inline_endpoints) == 41
 
         # Sample check - inline object with literal values
         sample = next(
