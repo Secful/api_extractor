@@ -11,6 +11,7 @@ from api_extractor.extractors.python.fastapi import FastAPIExtractor
 from api_extractor.extractors.python.flask import FlaskExtractor
 from api_extractor.extractors.python.django_rest import DjangoRESTExtractor
 from api_extractor.extractors.javascript.express import ExpressExtractor
+from api_extractor.extractors.javascript.express_zod_api import ExpressZodAPIExtractor
 from api_extractor.extractors.javascript.nestjs import NestJSExtractor
 from api_extractor.extractors.javascript.fastify import FastifyExtractor
 from api_extractor.extractors.javascript.nextjs import NextJSExtractor
@@ -27,7 +28,7 @@ def get_extractor(framework: FrameworkType):
         FrameworkType.FLASK: FlaskExtractor,
         FrameworkType.DJANGO_REST: DjangoRESTExtractor,
         FrameworkType.EXPRESS: ExpressExtractor,
-        FrameworkType.EXPRESS_ZOD_API: ExpressExtractor,  # Same extractor
+        FrameworkType.EXPRESS_ZOD_API: ExpressZodAPIExtractor,
         FrameworkType.NESTJS: NestJSExtractor,
         FrameworkType.FASTIFY: FastifyExtractor,
         FrameworkType.NEXTJS: NextJSExtractor,
@@ -58,7 +59,7 @@ FIXTURES = [
     # JavaScript Express
     ("javascript/express/acquisitions", "express-acquisitions", None),
     ("javascript/express/node-express-boilerplate", "express-boilerplate", None),
-    ("javascript/express/express-zod-api", "express-zod-api", None),
+    ("javascript/express/express-zod-api/example", "express-zod-api", FrameworkType.EXPRESS_ZOD_API),
 
     # JavaScript NestJS
     ("javascript/nestjs/nestjs-realworld", "nestjs-realworld", None),

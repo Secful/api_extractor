@@ -305,7 +305,30 @@ class GinExtractor(BaseExtractor):
 
             else:
                 # Same-file handler - check package registry too
-                if handler_info["name"] != "<anonymous>":
+                if handler_info["name"] == "<anonymous>":
+                    # Anonymous inline function - extract directly from AST node
+                    if "func_node" in handler_info:
+                        func_node = handler_info["func_node"]
+                        # Get function body
+                        func_body = func_node.child_by_field_name("body")
+                        if func_body:
+                            # Extract response from c.JSON in inline function
+                            response_result = self._find_json_call(func_body, source_code)
+                            if response_result:
+                                # Check if it's already a Schema object (inline gin.H)
+                                if isinstance(response_result, Schema):
+                                    handler_schemas["response_schema"] = response_result
+                                # Check if it's a type name
+                                elif isinstance(response_result, str):
+                                    if response_result.startswith("[]"):
+                                        inner_type = response_result[2:]
+                                        if inner_type in struct_schemas:
+                                            from api_extractor.extractors.schema_utils import wrap_array_schema
+                                            handler_schemas["response_schema"] = wrap_array_schema(struct_schemas[inner_type])
+                                    elif response_result in struct_schemas:
+                                        handler_schemas["response_schema"] = struct_schemas[response_result]
+
+                elif handler_info["name"] != "<anonymous>":
                     handler_name = handler_info["name"]
 
                     # Try package registry first (for cross-file types in same package)
@@ -432,11 +455,12 @@ class GinExtractor(BaseExtractor):
                                 "is_qualified": True,
                             }
                     elif child.type == "func_literal":
-                        # Anonymous function
+                        # Anonymous function - return node for direct extraction
                         return {
                             "name": "<anonymous>",
                             "package": None,
                             "is_qualified": False,
+                            "func_node": child,  # Include AST node for inline extraction
                         }
         return None
 
@@ -876,19 +900,52 @@ class GinExtractor(BaseExtractor):
                     metadata["request_body"] = struct_schemas[request_type]
 
             # Search for c.JSON calls (response body)
-            response_type = self._find_json_call(func_body_node, source_code)
-            if response_type:
-                # Check if it's a slice first
-                if response_type.startswith("[]"):
-                    inner_type = response_type[2:]
+            response_result = self._find_json_call(func_body_node, source_code)
+            if response_result:
+                # Check if it's already a Schema object (inline gin.H)
+                if isinstance(response_result, Schema):
+                    metadata["response_schema"] = response_result
+                # Check if it's a slice type name
+                elif isinstance(response_result, str) and response_result.startswith("[]"):
+                    inner_type = response_result[2:]
+                    # Try same-file structs first
                     if inner_type in struct_schemas:
                         metadata["response_schema"] = wrap_array_schema(struct_schemas[inner_type])
-                elif response_type in struct_schemas:
-                    metadata["response_schema"] = struct_schemas[response_type]
+                    else:
+                        # Try package registry (cross-file structs)
+                        resolved_schema = self._resolve_type_from_registry(inner_type)
+                        if resolved_schema:
+                            metadata["response_schema"] = wrap_array_schema(resolved_schema)
+                # Check if it's a struct type name
+                elif isinstance(response_result, str):
+                    # Try same-file structs first
+                    if response_result in struct_schemas:
+                        metadata["response_schema"] = struct_schemas[response_result]
+                    else:
+                        # Try package registry (cross-file structs)
+                        resolved_schema = self._resolve_type_from_registry(response_result)
+                        if resolved_schema:
+                            metadata["response_schema"] = resolved_schema
 
             break
 
         return metadata
+
+    def _resolve_type_from_registry(self, type_name: str) -> Optional[Schema]:
+        """
+        Resolve type from package registry (cross-file lookup).
+
+        Args:
+            type_name: Type name to resolve
+
+        Returns:
+            Schema or None
+        """
+        # Search all packages in registry for this type
+        for package_path, package_structs in self.package_registry.items():
+            if type_name in package_structs:
+                return package_structs[type_name]
+        return None
 
     def _find_bind_call_in_text(self, body_text: str) -> Optional[str]:
         """
@@ -974,7 +1031,7 @@ class GinExtractor(BaseExtractor):
 
         return None
 
-    def _find_json_call(self, body_node: Node, source_code: bytes) -> Optional[str]:
+    def _find_json_call(self, body_node: Node, source_code: bytes) -> Optional[str | Schema]:
         """
         Find JSON response and extract type.
 
@@ -983,13 +1040,14 @@ class GinExtractor(BaseExtractor):
         2. Variable: response := UserResponse{}; c.JSON(200, response)
         3. Serializer: serializer.Response() → trace return type
         4. Wrapped: gin.H{"user": serializer.Response()} → extract inner type
+        5. Inline gin.H: gin.H{"message": "pong", "status": "ok"} → infer schema
 
         Args:
             body_node: Function body node
             source_code: Source code bytes
 
         Returns:
-            Type name or None
+            Type name string, Schema object for inline gin.H, or None
         """
         from api_extractor.extractors.schema_utils import find_type_in_variable_chain
 
@@ -1006,12 +1064,13 @@ class GinExtractor(BaseExtractor):
 
         # Pattern 2: gin.H wrapper with serializer - gin.H{"user": serializer.Response()}
         # Find all c.JSON calls with gin.H
-        gin_h_matches = re.finditer(
+        # Note: Don't return early - if resolution fails, try other patterns
+        gin_h_serializer_matches = list(re.finditer(
             r'\.JSON\s*\(\s*[\w.]+\s*,\s*gin\.H\s*\{[^}]*"(\w+)":\s*(\w+)\.(\w+)\(\)',
             body_text
-        )
+        ))
 
-        for match in gin_h_matches:
+        for match in gin_h_serializer_matches:
             json_key = match.group(1)  # e.g., "user"
             serializer_var = match.group(2)  # e.g., "serializer"
             method_name = match.group(3)  # e.g., "Response"
@@ -1028,6 +1087,7 @@ class GinExtractor(BaseExtractor):
                 )
                 if return_type:
                     return return_type
+            # If serializer type not resolved, continue to other patterns
 
         # Pattern 3: Direct serializer - c.JSON(status, serializer.Response())
         serializer_match = re.search(r'\.JSON\s*\(\s*[\w.]+\s*,\s*(\w+)\.(\w+)\(\)', body_text)
@@ -1045,8 +1105,26 @@ class GinExtractor(BaseExtractor):
                 )
                 if return_type:
                     return return_type
+            # If serializer type not resolved, continue to other patterns
 
-        # Pattern 4: c.JSON(status, variable) - try to find variable type
+        # Pattern 4: Inline gin.H with literal values - gin.H{"message": "pong", "count": 42}
+        # Extract last 2xx c.JSON call with gin.H
+        inline_gin_h_matches = list(re.finditer(
+            r'\.JSON\s*\(\s*(http\.Status\w+|2\d{2})\s*,\s*gin\.H\s*\{([^}]+)\}',
+            body_text
+        ))
+
+        if inline_gin_h_matches:
+            # Take last match (usually success response)
+            last_match = inline_gin_h_matches[-1]
+            gin_h_content = last_match.group(2)
+
+            # Parse gin.H content to build schema
+            schema = self._parse_gin_h_to_schema(gin_h_content)
+            if schema:
+                return schema
+
+        # Pattern 5: c.JSON(status, variable) - try to find variable type
         # Status can be a number or constant like http.StatusOK
         # Match all c.JSON calls and find the last one (usually the success response)
         var_matches = list(re.finditer(r'\.JSON\s*\(\s*[\w.]+\s*,\s*([\w.]+)\s*\)', body_text))
@@ -1078,6 +1156,56 @@ class GinExtractor(BaseExtractor):
 
         return None
 
+    def _parse_gin_h_to_schema(self, gin_h_content: str) -> Optional[Schema]:
+        """
+        Parse gin.H map literal to infer response schema.
+
+        Extracts keys and infers types from values.
+
+        Args:
+            gin_h_content: Content between gin.H{ and }
+
+        Returns:
+            Schema object or None
+        """
+        properties = {}
+
+        # Match key-value pairs: "key": value
+        # Value can be: string literal, number, bool, function call, variable
+        pairs = re.findall(r'"(\w+)"\s*:\s*([^,}]+)', gin_h_content)
+
+        for key, value in pairs:
+            value = value.strip()
+
+            # Infer type from value
+            if value.startswith('"') or value.startswith('`'):
+                # String literal
+                properties[key] = {"type": "string"}
+            elif value in ('true', 'false'):
+                # Boolean
+                properties[key] = {"type": "boolean"}
+            elif re.match(r'^\d+$', value):
+                # Integer
+                properties[key] = {"type": "integer"}
+            elif re.match(r'^\d+\.\d+$', value):
+                # Float
+                properties[key] = {"type": "number"}
+            elif value.endswith('()'):
+                # Function call - assume returns string/object
+                properties[key] = {"type": "string"}
+            else:
+                # Variable reference or unknown - default to string
+                properties[key] = {"type": "string"}
+
+        if not properties:
+            return None
+
+        return Schema(
+            type="object",
+            properties=properties,
+            required=list(properties.keys())
+        )
+
     def _trace_serializer_method(
         self,
         serializer_type: str,
@@ -1090,27 +1218,52 @@ class GinExtractor(BaseExtractor):
         Note: Since serializers are often in separate files, we use a naming convention:
         - UserSerializer.Response() → UserResponse
         - ProfileSerializer.Response() → ProfileResponse
+        - UsersSerializer.Response() → []UserResponse (plural returns array)
+        - ArticlesSerializer.Response() → []ArticleResponse (plural returns array)
 
         Args:
-            serializer_type: Serializer type name (e.g., "UserSerializer")
+            serializer_type: Serializer type name (e.g., "UserSerializer", "UsersSerializer")
             method_name: Method name to find (e.g., "Response")
             source_code: Source code bytes
 
         Returns:
-            Return type name or None if not found
+            Return type name (e.g., "UserResponse" or "[]UserResponse") or None
 
         Examples:
-            serializer_type = "UserSerializer"
-            method_name = "Response"
-
-            Returns: "UserResponse" (by convention)
+            serializer_type = "UserSerializer" → "UserResponse"
+            serializer_type = "UsersSerializer" → "[]UserResponse"
+            serializer_type = "ArticlesSerializer" → "[]ArticleResponse"
         """
         # Common naming pattern: XSerializer.Response() → XResponse
         if serializer_type.endswith("Serializer") and method_name == "Response":
             # Extract base name: "UserSerializer" → "User"
             base_name = serializer_type[:-10]  # Remove "Serializer"
+
+            # Handle plural serializers: ArticlesSerializer → []ArticleResponse
+            # Convention: plural serializer returns array of singular response
+            if base_name.endswith('s') and len(base_name) > 1:
+                # Try singular form: "Articles" → "Article"
+                singular_base = base_name[:-1]
+                singular_response = f"{singular_base}Response"
+
+                # Check if singular response type exists in registry
+                if self._resolve_type_from_registry(singular_response):
+                    return f"[]{singular_response}"
+                # If singular doesn't exist, check if plural response exists
+                # (Some projects use TagsResponse instead of []TagResponse)
+                plural_response = f"{base_name}Response"
+                if self._resolve_type_from_registry(plural_response):
+                    return plural_response
+                # Neither exists - return None to try other patterns (e.g., inline gin.H)
+                return None
+
+            # Default: singular response
             response_type = f"{base_name}Response"
-            return response_type
+            # Check if it exists before returning
+            if self._resolve_type_from_registry(response_type):
+                return response_type
+            # Type doesn't exist - return None to allow fallback patterns
+            return None
 
         # Fallback: Try to find in current tree (same-file method)
         from api_extractor.extractors.schema_utils import trace_method_return_type

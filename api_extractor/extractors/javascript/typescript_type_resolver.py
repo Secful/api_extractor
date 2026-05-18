@@ -94,18 +94,30 @@ class TypeScriptTypeResolver:
         if not arguments_node:
             return None
 
-        # Find first object literal in arguments
-        object_literal = None
+        # Find first argument (object literal or other expression)
+        first_arg = None
         for child in arguments_node.children:
-            if child.type == "object":
-                object_literal = child
+            if child.type in ("object", "identifier", "call_expression", "member_expression"):
+                first_arg = child
                 break
 
-        if not object_literal:
+        if not first_arg:
             return None
 
-        # Extract schema from object literal
-        schema = self.extract_schema_from_object_literal(object_literal, source_code)
+        # Extract schema based on argument type
+        schema = None
+        if first_arg.type == "object":
+            # Direct object literal: {foo: "bar"}
+            schema = self.extract_schema_from_object_literal(first_arg, source_code)
+        elif first_arg.type == "identifier":
+            # Variable reference: NextResponse.json(result)
+            # Try infer from variable type if possible (limited support)
+            schema = self._infer_schema_from_identifier(first_arg, source_code, file_path)
+        elif first_arg.type in ("call_expression", "member_expression"):
+            # Function call or property access: NextResponse.json(getData())
+            # Limited support - can't easily infer return type
+            pass
+
         if not schema:
             return None
 
@@ -585,11 +597,6 @@ class TypeScriptTypeResolver:
         if not key_node or not value_node:
             return None
 
-        # Skip call expressions and identifiers (variables/functions)
-        # Can't reliably infer their types at runtime
-        if value_node.type in ("call_expression", "identifier"):
-            return None
-
         # Extract property name
         prop_name = self.parser.get_node_text(key_node, source_code)
         # Remove quotes if present
@@ -645,10 +652,521 @@ class TypeScriptTypeResolver:
             # Variable reference - can't infer type
             return {"type": "string"}
         elif node.type == "call_expression":
-            # Function call result - can't infer type
+            # Function call result - check if it's an array method
+            func_node = node.child_by_field_name("function")
+            if func_node and func_node.type == "member_expression":
+                prop_node = func_node.child_by_field_name("property")
+                if prop_node:
+                    method_name = self.parser.get_node_text(prop_node, source_code)
+                    # Array methods that return arrays
+                    if method_name in ("map", "filter", "flatMap", "slice", "concat", "reduce"):
+                        return {"type": "array", "items": {"type": "object"}}
             return {"type": "string"}
 
         return {"type": "string"}
+
+    def _infer_schema_from_identifier(
+        self, node: Node, source_code: bytes, file_path: str
+    ) -> Optional[Schema]:
+        """
+        Infer schema from identifier by looking for variable assignments.
+
+        Patterns:
+        - const result = { foo: bar }
+        - const result = await getData()  [checks getData return type]
+
+        Args:
+            node: Identifier node
+            source_code: Source code bytes
+            file_path: File path
+
+        Returns:
+            Schema if inferred, None otherwise
+        """
+        # Get identifier name
+        identifier_name = self.parser.get_node_text(node, source_code)
+
+        # Walk up tree to find containing function
+        current = node.parent
+        while current and current.type not in ("arrow_function", "function_declaration", "method_definition"):
+            current = current.parent
+
+        if not current:
+            return None
+
+        # Search function body for variable declarations
+        def find_variable_assignment(node, var_name):
+            if node.type == "variable_declarator":
+                name_node = node.child_by_field_name("name")
+                value_node = node.child_by_field_name("value")
+                if name_node and value_node:
+                    name = self.parser.get_node_text(name_node, source_code)
+                    if name == var_name:
+                        return value_node
+
+            for child in node.children:
+                result = find_variable_assignment(child, var_name)
+                if result:
+                    return result
+            return None
+
+        value_node = find_variable_assignment(current, identifier_name)
+        if not value_node:
+            return None
+
+        # Strategy 1: Direct object literal
+        if value_node.type == "object":
+            return self.extract_schema_from_object_literal(value_node, source_code)
+
+        # Strategy 2: Await expression wrapping call - extract function and check return type
+        if value_node.type == "await_expression":
+            call_node = value_node.child_by_field_name("argument")
+            if call_node and call_node.type == "call_expression":
+                value_node = call_node
+
+        # Strategy 3: Call expression - try infer from function return type
+        if value_node.type == "call_expression":
+            func_node = value_node.child_by_field_name("function")
+            if func_node:
+                # Check if it's a Prisma query first
+                prisma_schema = self._infer_schema_from_prisma_call(value_node, source_code)
+                if prisma_schema:
+                    return prisma_schema
+
+                # Fallback to function return type
+                return self._infer_schema_from_function_call(func_node, source_code, file_path)
+
+        return None
+
+    def _infer_schema_from_prisma_call(
+        self, call_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Infer schema from Prisma query with select clause.
+
+        Pattern: prisma.model.findUnique({ select: { id: true, name: true } })
+
+        Args:
+            call_node: Call expression node
+            source_code: Source code bytes
+
+        Returns:
+            Schema if inferred from select, None otherwise
+        """
+        # Check if call is prisma query: prisma.model.findXXX
+        func_node = call_node.child_by_field_name("function")
+        if not func_node or func_node.type != "member_expression":
+            return None
+
+        # Get full call chain text
+        func_text = self.parser.get_node_text(func_node, source_code)
+        if not ("prisma." in func_text and ("find" in func_text or "count" in func_text)):
+            return None
+
+        # Find select clause in arguments
+        args_node = call_node.child_by_field_name("arguments")
+        if not args_node:
+            return None
+
+        # Look for select property in object argument
+        for child in args_node.children:
+            if child.type == "object":
+                select_schema = self._extract_schema_from_prisma_select(child, source_code)
+                if select_schema:
+                    return select_schema
+
+        return None
+
+    def _extract_schema_from_prisma_select(
+        self, options_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Extract schema from Prisma select clause.
+
+        Pattern: { select: { id: true, name: true, email: true } }
+
+        Args:
+            options_node: Object node containing select
+            source_code: Source code bytes
+
+        Returns:
+            Schema with properties from select, None otherwise
+        """
+        # Find select property
+        for child in options_node.children:
+            if child.type == "pair":
+                key_node = child.child_by_field_name("key")
+                value_node = child.child_by_field_name("value")
+
+                if key_node and value_node:
+                    key = self.parser.get_node_text(key_node, source_code)
+                    if key == "select" and value_node.type == "object":
+                        # Extract selected fields
+                        properties = {}
+                        required = []
+
+                        for select_child in value_node.children:
+                            if select_child.type == "pair":
+                                field_key_node = select_child.child_by_field_name("key")
+                                field_value_node = select_child.child_by_field_name("value")
+
+                                if field_key_node:
+                                    field_name = self.parser.get_node_text(field_key_node, source_code)
+
+                                    # Check if value is true (selected) or nested select
+                                    if field_value_node:
+                                        field_value_text = self.parser.get_node_text(field_value_node, source_code)
+                                        if field_value_text == "true":
+                                            # Simple field selection
+                                            properties[field_name] = {"type": "string"}
+                                            required.append(field_name)
+                                        elif field_value_node.type == "object":
+                                            # Nested relation with select
+                                            nested_schema = self._extract_schema_from_prisma_select(field_value_node, source_code)
+                                            if nested_schema and nested_schema.properties:
+                                                properties[field_name] = {
+                                                    "type": "object",
+                                                    "properties": nested_schema.properties,
+                                                    "required": nested_schema.required
+                                                }
+                                            else:
+                                                properties[field_name] = {"type": "object"}
+                                            required.append(field_name)
+
+                        if properties:
+                            return Schema(
+                                type="object",
+                                properties=properties,
+                                required=required if required else None
+                            )
+
+        return None
+
+    def _infer_schema_from_function_call(
+        self, func_node: Node, source_code: bytes, file_path: str
+    ) -> Optional[Schema]:
+        """
+        Infer schema from function call by checking function return type or body.
+
+        Pattern: getStatsByPeriod() → find function → check return type or Prisma query
+
+        Args:
+            func_node: Function identifier or member expression
+            source_code: Source code bytes
+            file_path: File path
+
+        Returns:
+            Schema if found, None otherwise
+        """
+        # Get function name
+        if func_node.type == "identifier":
+            func_name = self.parser.get_node_text(func_node, source_code)
+        elif func_node.type == "member_expression":
+            # obj.method() - skip for now
+            return None
+        else:
+            return None
+
+        # Strategy 1: Check explicit return type annotation
+        schema = self._find_function_return_type_in_file(func_name, file_path)
+        if schema:
+            return schema
+
+        # Strategy 2: Parse function body for Prisma query
+        schema = self._find_prisma_query_in_function(func_name, file_path, source_code)
+        if schema:
+            return schema
+
+        # Strategy 3: Check imports - function might be in controller
+        imported_path = self._find_function_import(func_name, file_path)
+        if imported_path:
+            try:
+                with open(imported_path, "rb") as f:
+                    imported_source = f.read()
+            except Exception:
+                return None
+
+            schema = self._find_function_return_type_in_file(func_name, imported_path)
+            if schema:
+                return schema
+
+            schema = self._find_prisma_query_in_function(func_name, imported_path, imported_source)
+            if schema:
+                return schema
+
+        return None
+
+    def _find_prisma_query_in_function(
+        self, func_name: str, file_path: str, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Find Prisma query in function body and extract schema from select.
+
+        Args:
+            func_name: Function name
+            file_path: File path
+            source_code: Source code bytes
+
+        Returns:
+            Schema from Prisma select if found, None otherwise
+        """
+        tree = self.parser.parse_source(source_code, "typescript")
+        if not tree:
+            return None
+
+        # Find function definition
+        func_query = """
+        (function_declaration
+          name: (identifier) @name
+          body: (statement_block) @body)
+        """
+
+        matches = self.parser.query(tree, func_query, "typescript")
+        for match in matches:
+            name_node = match.get("name")
+            body_node = match.get("body")
+
+            if name_node and body_node:
+                name = self.parser.get_node_text(name_node, source_code)
+                if name == func_name:
+                    # Search body for Prisma calls
+                    return self._find_prisma_in_node(body_node, source_code)
+
+        # Also check arrow functions
+        arrow_query = """
+        (lexical_declaration
+          (variable_declarator
+            name: (identifier) @name
+            value: (arrow_function
+              body: (_) @body)))
+        """
+
+        matches = self.parser.query(tree, arrow_query, "typescript")
+        for match in matches:
+            name_node = match.get("name")
+            body_node = match.get("body")
+
+            if name_node and body_node:
+                name = self.parser.get_node_text(name_node, source_code)
+                if name == func_name:
+                    return self._find_prisma_in_node(body_node, source_code)
+
+        return None
+
+    def _find_prisma_in_node(
+        self, node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Recursively search node tree for Prisma query with select.
+
+        Args:
+            node: Node to search
+            source_code: Source code bytes
+
+        Returns:
+            Schema if Prisma query found, None otherwise
+        """
+        if node.type == "call_expression":
+            schema = self._infer_schema_from_prisma_call(node, source_code)
+            if schema:
+                return schema
+
+        for child in node.children:
+            schema = self._find_prisma_in_node(child, source_code)
+            if schema:
+                return schema
+
+        return None
+
+    def _find_function_return_type_in_file(
+        self, func_name: str, file_path: str
+    ) -> Optional[Schema]:
+        """
+        Find function definition and extract return type annotation.
+
+        Pattern: async function getData(): Promise<DataType> { ... }
+
+        Args:
+            func_name: Function name
+            file_path: File path to search
+
+        Returns:
+            Schema if return type found, None otherwise
+        """
+        try:
+            with open(file_path, "rb") as f:
+                source = f.read()
+        except Exception:
+            return None
+
+        tree = self.parser.parse_source(source, "typescript")
+        if not tree:
+            return None
+
+        # Query for function declarations with return type
+        func_query = """
+        (function_declaration
+          name: (identifier) @name
+          return_type: (type_annotation) @return_type)
+        """
+
+        matches = self.parser.query(tree, func_query, "typescript")
+        for match in matches:
+            name_node = match.get("name")
+            return_type_node = match.get("return_type")
+
+            if name_node and return_type_node:
+                name = self.parser.get_node_text(name_node, source)
+                if name == func_name:
+                    return self._extract_schema_from_return_type(return_type_node, source, file_path)
+
+        # Also check exported const arrow functions
+        arrow_query = """
+        (lexical_declaration
+          (variable_declarator
+            name: (identifier) @name
+            value: (arrow_function
+              return_type: (type_annotation) @return_type)))
+        """
+
+        matches = self.parser.query(tree, arrow_query, "typescript")
+        for match in matches:
+            name_node = match.get("name")
+            return_type_node = match.get("return_type")
+
+            if name_node and return_type_node:
+                name = self.parser.get_node_text(name_node, source)
+                if name == func_name:
+                    return self._extract_schema_from_return_type(return_type_node, source, file_path)
+
+        return None
+
+    def _extract_schema_from_return_type(
+        self, type_annotation_node: Node, source_code: bytes, file_path: str
+    ) -> Optional[Schema]:
+        """
+        Extract schema from TypeScript return type annotation.
+
+        Pattern: Promise<DataType> or DataType
+
+        Args:
+            type_annotation_node: Type annotation node
+            source_code: Source code bytes
+            file_path: File path
+
+        Returns:
+            Schema if extracted, None otherwise
+        """
+        # type_annotation has child with actual type
+        for child in type_annotation_node.children:
+            if child.type in ("generic_type", "type_identifier"):
+                return self._resolve_type_from_node(child, source_code, file_path)
+
+        return None
+
+    def _resolve_type_from_node(
+        self, type_node: Node, source_code: bytes, file_path: str
+    ) -> Optional[Schema]:
+        """
+        Resolve TypeScript type node to schema.
+
+        Handles: Promise<Type>, Type, generic types
+
+        Args:
+            type_node: Type node
+            source_code: Source code bytes
+            file_path: File path
+
+        Returns:
+            Schema if resolved, None otherwise
+        """
+        if type_node.type == "generic_type":
+            # Promise<DataType> - extract DataType
+            type_args = type_node.child_by_field_name("type_arguments")
+            if type_args:
+                for child in type_args.children:
+                    if child.type == "type_identifier":
+                        type_name = self.parser.get_node_text(child, source_code)
+                        return self.resolve_type_reference(type_name, file_path)
+
+        elif type_node.type == "type_identifier":
+            type_name = self.parser.get_node_text(type_node, source_code)
+            return self.resolve_type_reference(type_name, file_path)
+
+        return None
+
+    def _find_function_import(
+        self, func_name: str, file_path: str
+    ) -> Optional[str]:
+        """
+        Find file path from which function is imported.
+
+        Pattern: import { getData } from "./controller"
+
+        Args:
+            func_name: Function name
+            file_path: Current file path
+
+        Returns:
+            Imported file path if found, None otherwise
+        """
+        try:
+            with open(file_path, "rb") as f:
+                source = f.read()
+        except Exception:
+            return None
+
+        tree = self.parser.parse_source(source, "typescript")
+        if not tree:
+            return None
+
+        # Query for named imports
+        import_query = """
+        (import_statement
+          (import_clause
+            (named_imports
+              (import_specifier
+                name: (identifier) @imported_name)))
+          source: (string) @source)
+        """
+
+        matches = self.parser.query(tree, import_query, "typescript")
+        for match in matches:
+            imported_name_node = match.get("imported_name")
+            source_node = match.get("source")
+
+            if imported_name_node and source_node:
+                imported_name = self.parser.get_node_text(imported_name_node, source)
+                if imported_name == func_name:
+                    import_path = self.parser.get_node_text(source_node, source).strip('"\'')
+
+                    # Resolve relative import
+                    if import_path.startswith("."):
+                        import os
+                        current_dir = os.path.dirname(file_path)
+                        resolved_path = os.path.normpath(os.path.join(current_dir, import_path))
+
+                        # Try extensions
+                        for ext in [".ts", ".tsx", ".js", ".jsx"]:
+                            full_path = resolved_path + ext
+                            if os.path.exists(full_path):
+                                return full_path
+
+        return None
+
+    def _extract_status_code(
+        self, node: Node, source_code: bytes
+    ) -> Optional[int]:
+        """
+        Extract status code from NextResponse.json(body, { status: 400 }) pattern.
+
+        Args:
+            node: Call expression node
+            source_code: Source code bytes
+
+        Returns:
+            Status code integer or None
+        """
 
     def _extract_status_code(
         self, node: Node, source_code: bytes

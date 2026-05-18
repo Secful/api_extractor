@@ -645,7 +645,9 @@ class JSONSchemaParser(BaseValidationParser):
 
             # Get value
             value = self._parse_value(value_node, source_code)
-            result[key] = value
+            # Skip None values (from non-literal expressions)
+            if value is not None:
+                result[key] = value
 
         return result
 
@@ -677,8 +679,9 @@ class JSONSchemaParser(BaseValidationParser):
         elif node.type == "object":
             return self._object_to_dict(node, source_code)
         else:
-            # Fallback
-            return self.parser.get_node_text(node, source_code)
+            # Unknown type (identifier, call_expression, etc) - not a literal value
+            # Return None to skip rather than stringifying (causes Schema validation errors)
+            return None
 
     def _array_to_list(self, node: Node, source_code: bytes) -> list:
         """

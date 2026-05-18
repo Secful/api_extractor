@@ -2711,6 +2711,12 @@ class FastAPIExtractor(BaseExtractor):
         if return_type in pydantic_models:
             return pydantic_models[return_type]
 
+        # Lazy resolution: try to resolve from imports
+        if imports and file_path and return_type in imports:
+            resolved_models = self._resolve_imported_models({return_type: imports[return_type]}, file_path)
+            if return_type in resolved_models:
+                return resolved_models[return_type]
+
         # Handle basic types
         type_map = {
             "str": "string",

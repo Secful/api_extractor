@@ -43,6 +43,9 @@ class DjangoRESTExtractor(BaseExtractor):
         self.router_prefixes: Dict[str, str] = {}
         # Base path for the project (set during extract())
         self.base_path: str = ""
+        # Global serializer registry across all files
+        # e.g., {"SnippetSerializer": Schema(...)}
+        self.serializer_registry: Dict[str, Schema] = {}
 
     def get_file_extensions(self) -> List[str]:
         """Get Python file extensions."""
@@ -67,10 +70,18 @@ class DjangoRESTExtractor(BaseExtractor):
         self.viewset_registrations = {}
         self.url_includes = {}
         self.router_prefixes = {}
+        self.serializer_registry = {}
         self.base_path = path
 
         # Find all relevant files
         files = self._find_source_files(path)
+
+        # Pass 0: Extract serializers from all files to build registry
+        for file_path in files:
+            try:
+                self._extract_serializers_from_file(file_path)
+            except Exception as e:
+                self.errors.append(f"Error extracting serializers from {file_path}: {str(e)}")
 
         # Pass 1: Extract URL includes to build prefix mappings
         for file_path in files:
@@ -346,6 +357,24 @@ class DjangoRESTExtractor(BaseExtractor):
                 # Store the mapping
                 self.viewset_registrations[viewset_class] = path_prefix
 
+    def _extract_serializers_from_file(self, file_path: str) -> None:
+        """
+        Extract serializers from a file and add to global registry.
+
+        Args:
+            file_path: Path to Python file
+        """
+        source_code = self._read_file(file_path)
+        if not source_code:
+            return
+
+        tree = self.parser.parse_source(source_code, "python")
+        if not tree:
+            return
+
+        serializers = self._find_serializers(tree, source_code)
+        self.serializer_registry.update(serializers)
+
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
         """
         Extract routes from a Django REST Framework file.
@@ -368,8 +397,8 @@ class DjangoRESTExtractor(BaseExtractor):
         if not tree:
             return routes
 
-        # First, find all serializer classes
-        serializers = self._find_serializers(tree, source_code)
+        # Use global serializer registry instead of local
+        serializers = self.serializer_registry
 
         # Query 1: Find ViewSet/APIView classes with base classes
         class_query = """
@@ -701,6 +730,17 @@ class DjangoRESTExtractor(BaseExtractor):
             else:
                 path = f"{base}/{method_name}/"
 
+            # Extract response schema from function body
+            metadata = {}
+            func_def_node = match.get("func_name")
+            if func_def_node and func_def_node.parent and func_def_node.parent.type == "function_definition":
+                func_node = func_def_node.parent
+                func_body = func_node.child_by_field_name("body")
+                if func_body:
+                    response_schema = self._extract_response_from_action(func_body, source_code)
+                    if response_schema:
+                        metadata["response_schema"] = response_schema
+
             for http_method in http_methods:
                 route = Route(
                     path=path,
@@ -710,6 +750,7 @@ class DjangoRESTExtractor(BaseExtractor):
                     raw_path=path,
                     source_file=file_path,
                     source_line=location["start_line"],
+                    metadata=metadata,
                 )
                 routes.append(route)
 
@@ -918,6 +959,21 @@ class DjangoRESTExtractor(BaseExtractor):
                             properties[name] = field_schema
                             if is_required:
                                 required.append(name)
+            elif child.type == "class_definition":
+                # Check for Meta class
+                class_name_node = child.child_by_field_name("name")
+                if class_name_node:
+                    class_name = self.parser.get_node_text(class_name_node, source_code)
+                    if class_name == "Meta":
+                        # Parse fields from Meta class
+                        meta_fields = self._parse_meta_fields(child, source_code)
+                        if meta_fields:
+                            # For ModelSerializer, create properties from field names
+                            for field_name in meta_fields:
+                                # Default to string type for Meta-defined fields
+                                # (proper type inference would require model introspection)
+                                properties[field_name] = {"type": "string"}
+                                required.append(field_name)
 
         return Schema(
             type="object",
@@ -1008,6 +1064,104 @@ class DjangoRESTExtractor(BaseExtractor):
             constraints["maximum"] = 10 ** int(max_digits_match.group(1))
 
         return (field_type, constraints)
+
+    def _parse_meta_fields(self, meta_class_node: Node, source_code: bytes) -> List[str]:
+        """
+        Parse fields from Meta class fields attribute.
+
+        Args:
+            meta_class_node: Meta class definition node
+            source_code: Source code bytes
+
+        Returns:
+            List of field names
+        """
+        fields = []
+        class_body = meta_class_node.child_by_field_name("body")
+        if not class_body:
+            return fields
+
+        # Look for fields = (...) assignment
+        for child in class_body.children:
+            if child.type == "expression_statement":
+                for expr_child in child.children:
+                    if expr_child.type == "assignment":
+                        left = expr_child.child_by_field_name("left")
+                        right = expr_child.child_by_field_name("right")
+
+                        if left and right:
+                            left_text = self.parser.get_node_text(left, source_code)
+                            if left_text == "fields":
+                                # Extract field names from tuple or list
+                                if right.type in ("tuple", "list"):
+                                    for item in right.children:
+                                        if item.type == "string":
+                                            field_name = self.parser.extract_string_value(item, source_code)
+                                            if field_name:
+                                                fields.append(field_name)
+                                elif right.type == "string":
+                                    # fields = '__all__' case - skip for now
+                                    pass
+
+        return fields
+
+    def _extract_response_from_action(self, func_body: Node, source_code: bytes) -> Optional[Schema]:
+        """
+        Extract response schema from @action method body.
+
+        Looks for Response(...) calls and infers schema from argument.
+
+        Args:
+            func_body: Function body node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object or None
+        """
+        # Look for return Response(...) statements
+        for child in func_body.children:
+            if child.type == "return_statement":
+                # Find Response() call
+                for return_child in child.children:
+                    if return_child.type == "call":
+                        func_node = return_child.child_by_field_name("function")
+                        if func_node:
+                            func_text = self.parser.get_node_text(func_node, source_code)
+                            if func_text == "Response":
+                                # Get first argument
+                                args = return_child.child_by_field_name("arguments")
+                                if args and args.children:
+                                    for arg in args.children:
+                                        if arg.type not in (",", "(", ")"):
+                                            # Infer type from argument
+                                            return self._infer_response_type(arg, source_code)
+        return None
+
+    def _infer_response_type(self, node: Node, source_code: bytes) -> Optional[Schema]:
+        """
+        Infer response type from Response() argument.
+
+        Args:
+            node: Argument node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object or None
+        """
+        if node.type == "string":
+            # Plain string response
+            return Schema(type="string")
+        elif node.type == "dictionary":
+            # Dict response - could parse keys but default to object
+            return Schema(type="object")
+        elif node.type == "list":
+            # List response
+            return Schema(type="array")
+        elif node.type == "attribute":
+            # model.field - assume string for now
+            return Schema(type="string")
+        # Default to string for other cases
+        return Schema(type="string")
 
     def _find_serializer_class_for_viewset(
         self, class_body_node: Node, source_code: bytes

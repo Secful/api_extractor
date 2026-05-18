@@ -79,10 +79,85 @@ class ASPNETCoreExtractor(BaseExtractor):
         self.parser = LanguageParser()
         # Track MapGroup prefix mappings: {variable_name: prefix_path}
         self.map_group_prefixes: Dict[str, str] = {}
+        # Global DTO registry across all files
+        self.dto_registry: Dict[str, Schema] = {}
 
     def get_file_extensions(self) -> List[str]:
         """Get supported file extensions."""
         return [".cs"]
+
+    def extract(self, path: str):
+        """
+        Override extract to build global DTO registry first.
+
+        Args:
+            path: Path to codebase directory
+
+        Returns:
+            ExtractionResult with endpoints and errors
+        """
+        self.endpoints = []
+        self.errors = []
+        self.warnings = []
+        self.dto_registry = {}
+        self.map_group_prefixes = {}
+
+        # Find all files
+        files = self._find_source_files(path)
+
+        # Pass 1: Extract DTOs from all files
+        for file_path in files:
+            try:
+                self._extract_dtos_from_file(file_path)
+            except Exception as e:
+                self.errors.append(f"Error extracting DTOs from {file_path}: {str(e)}")
+
+        # Pass 2: Extract routes using DTO registry
+        all_routes = []
+        for file_path in files:
+            try:
+                routes = self.extract_routes_from_file(file_path)
+                all_routes.extend(routes)
+            except Exception as e:
+                self.errors.append(f"Error extracting from {file_path}: {str(e)}")
+
+        # Convert routes to endpoints
+        for route in all_routes:
+            try:
+                endpoints = self._route_to_endpoints(route)
+                self.endpoints.extend(endpoints)
+            except Exception as e:
+                self.errors.append(f"Error converting route to endpoint: {str(e)}")
+
+        # Determine success
+        success = len(self.endpoints) > 0 and len(self.errors) == 0
+
+        from api_extractor.core.models import ExtractionResult
+        return ExtractionResult(
+            success=success,
+            endpoints=self.endpoints,
+            errors=self.errors,
+            warnings=self.warnings,
+            frameworks_detected=[self.framework],
+        )
+
+    def _extract_dtos_from_file(self, file_path: str) -> None:
+        """
+        Extract DTO classes from file and add to global registry.
+
+        Args:
+            file_path: Path to C# file
+        """
+        source_code = self._read_file(file_path)
+        if not source_code:
+            return
+
+        tree = self.parser.parse_source(source_code, "csharp")
+        if not tree:
+            return
+
+        dtos = self._find_dto_classes(tree, source_code)
+        self.dto_registry.update(dtos)
 
     def extract_routes_from_file(self, file_path: str) -> List[Route]:
         """
@@ -106,8 +181,8 @@ class ASPNETCoreExtractor(BaseExtractor):
         except Exception:
             return []
 
-        # Find all DTO classes for schema extraction
-        dto_schemas = self._find_dto_classes(tree, source_code)
+        # Use global DTO registry
+        dto_schemas = self.dto_registry
 
         # First, extract Controller-based routes
         # Query for class declarations
@@ -678,44 +753,68 @@ class ASPNETCoreExtractor(BaseExtractor):
         """
         schemas = {}
 
-        # Query for class declarations
+        # Query for class and record declarations
         class_query = """
         (class_declaration
           name: (identifier) @class_name
           body: (declaration_list) @class_body) @class_decl
         """
 
+        record_query = """
+        (record_declaration
+          name: (identifier) @class_name) @class_decl
+        """
+
         matches = self.parser.query(tree, class_query, "csharp")
+        record_matches = self.parser.query(tree, record_query, "csharp")
+        matches.extend(record_matches)
 
         for match in matches:
             class_name_node = match.get("class_name")
             class_body_node = match.get("class_body")
             class_decl_node = match.get("class_decl")
 
-            if not class_name_node or not class_body_node:
+            if not class_name_node:
                 continue
 
             class_name = self.parser.get_node_text(class_name_node, source_code)
 
             # Check if this is a controller - skip if so
-            controller_info = self._find_controller_attribute(class_decl_node, source_code)
-            if controller_info:
-                continue
+            if class_decl_node:
+                controller_info = self._find_controller_attribute(class_decl_node, source_code)
+                if controller_info:
+                    continue
 
             # Extract properties
             properties = {}
             required = []
 
-            for child in class_body_node.children:
-                if child.type == "property_declaration":
-                    prop_info = self._extract_property(child, source_code)
-                    if prop_info:
-                        properties[prop_info["name"]] = {
-                            "type": prop_info["type"],
-                        }
-                        # C# properties are required by default unless nullable
-                        if prop_info.get("required", True):
-                            required.append(prop_info["name"])
+            # Handle record types (have parameter_list instead of body)
+            if class_decl_node and class_decl_node.type == "record_declaration":
+                # Find parameter list for record constructor
+                for child in class_decl_node.children:
+                    if child.type == "parameter_list":
+                        for param in child.children:
+                            if param.type == "parameter":
+                                param_info = self._extract_record_parameter(param, source_code)
+                                if param_info:
+                                    properties[param_info["name"]] = {
+                                        "type": param_info["type"],
+                                    }
+                                    if param_info.get("required", True):
+                                        required.append(param_info["name"])
+            elif class_body_node:
+                # Handle class types (have body with properties)
+                for child in class_body_node.children:
+                    if child.type == "property_declaration":
+                        prop_info = self._extract_property(child, source_code)
+                        if prop_info:
+                            properties[prop_info["name"]] = {
+                                "type": prop_info["type"],
+                            }
+                            # C# properties are required by default unless nullable
+                            if prop_info.get("required", True):
+                                required.append(prop_info["name"])
 
             if properties:
                 schemas[class_name] = Schema(
@@ -725,6 +824,60 @@ class ASPNETCoreExtractor(BaseExtractor):
                 )
 
         return schemas
+
+    def _extract_record_parameter(self, param_node: Node, source_code: bytes) -> Optional[Dict]:
+        """
+        Extract parameter from record declaration.
+
+        Args:
+            param_node: Parameter node from record
+            source_code: Source code bytes
+
+        Returns:
+            Dictionary with parameter info or None
+        """
+        # For records, parameter format is: Type Name
+        # AST has two identifier children: first is type, second is name
+        identifiers = []
+        param_type = None
+        nullable = False
+
+        for child in param_node.children:
+            if child.type == "identifier":
+                identifiers.append(self.parser.get_node_text(child, source_code))
+            elif child.type in ["predefined_type", "generic_name"]:
+                param_type = self.parser.get_node_text(child, source_code)
+            elif child.type == "nullable_type":
+                nullable = True
+                # Extract inner type
+                for inner_child in child.children:
+                    if inner_child.type in ["predefined_type", "generic_name", "identifier"]:
+                        param_type = self.parser.get_node_text(inner_child, source_code)
+
+        # For simple types: identifiers[0] = type, identifiers[1] = name
+        # If param_type already set (generic/predefined), use it
+        if not param_type and len(identifiers) >= 2:
+            param_type = identifiers[0]
+            param_name = identifiers[1]
+        elif param_type and len(identifiers) >= 1:
+            param_name = identifiers[0]
+        elif len(identifiers) >= 2:
+            param_type = identifiers[0]
+            param_name = identifiers[1]
+        else:
+            return None
+
+        if param_name and param_type:
+            # Map C# type to OpenAPI type
+            openapi_type = self._parse_csharp_type(param_type)
+
+            return {
+                "name": param_name,
+                "type": openapi_type or "object",
+                "required": not nullable,
+            }
+
+        return None
 
     def _extract_property(self, prop_node: Node, source_code: bytes) -> Optional[Dict]:
         """

@@ -570,7 +570,150 @@ class ExpressExtractor(BaseExtractor):
                     if response_schema:
                         metadata["response_schema"] = response_schema
 
+        # If no TypeScript response schema found, extract from function body
+        if "response_schema" not in metadata:
+            body_node = handler_node.child_by_field_name("body")
+            if body_node:
+                response_schema = self._extract_response_from_body(body_node, source_code)
+                if response_schema:
+                    metadata["response_schema"] = response_schema
+
         return metadata
+
+    def _extract_response_from_body(self, body_node: Node, source_code: bytes) -> Optional[Schema]:
+        """
+        Extract response schema from function body by finding res.json() calls.
+
+        Args:
+            body_node: Function body node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object or None
+        """
+        # Find all res.json() or res.status().json() calls
+        for node in self._walk_tree(body_node):
+            if node.type == "call_expression":
+                # Check if this is res.json() or res.status(...).json()
+                func_node = node.child_by_field_name("function")
+                if func_node and func_node.type == "member_expression":
+                    property_node = func_node.child_by_field_name("property")
+                    if property_node:
+                        property_name = self.parser.get_node_text(property_node, source_code)
+                        if property_name == "json":
+                            # Found res.json() call - extract argument
+                            args_node = node.child_by_field_name("arguments")
+                            if args_node and args_node.children:
+                                for arg in args_node.children:
+                                    if arg.type not in (",", "(", ")"):
+                                        return self._infer_schema_from_expression(arg, source_code)
+        return None
+
+    def _infer_schema_from_expression(self, node: Node, source_code: bytes) -> Optional[Schema]:
+        """
+        Infer schema from JavaScript expression (object literal, variable, etc.).
+
+        Args:
+            node: Expression node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object or None
+        """
+
+        if node.type == "object":
+            # Inline object literal: { user, articles: [] }
+            result = self._parse_object_literal_to_schema(node, source_code)
+            return result
+        elif node.type == "array":
+            # Array literal
+            return Schema(type="array")
+        elif node.type == "string":
+            return Schema(type="string")
+        elif node.type == "number":
+            return Schema(type="number")
+        elif node.type == "true" or node.type == "false":
+            return Schema(type="boolean")
+        else:
+            # Variable or other expression - default to object
+            return Schema(type="object")
+
+    def _parse_object_literal_to_schema(self, object_node: Node, source_code: bytes) -> Schema:
+        """
+        Parse object literal to Schema.
+
+        Args:
+            object_node: Object node
+            source_code: Source code bytes
+
+        Returns:
+            Schema object
+        """
+        properties = {}
+        required = []
+
+
+        for child in object_node.children:
+            if child.type == "pair":
+                # key: value or shorthand property
+                key_node = child.child_by_field_name("key")
+                value_node = child.child_by_field_name("value")
+
+                if key_node:
+                    key_text = self.parser.get_node_text(key_node, source_code)
+                    # Remove quotes if string key
+                    if key_text.startswith(("'", '"')):
+                        key_text = key_text[1:-1]
+
+                    # Infer value type from deep expression analysis
+                    if value_node:
+                        value_schema_dict = self._infer_schema_from_value_node(value_node, source_code)
+                        if value_schema_dict:
+                            properties[key_text] = value_schema_dict
+                        else:
+                            # Fallback to generic object
+                            properties[key_text] = {"type": "object"}
+                    else:
+                        # Shorthand property like { user } - default to object
+                        properties[key_text] = {"type": "object"}
+
+                    required.append(key_text)
+            elif child.type == "shorthand_property_identifier":
+                # Shorthand like { user }
+                key_text = self.parser.get_node_text(child, source_code)
+                properties[key_text] = {"type": "object"}
+                required.append(key_text)
+
+        # Validate types before creating Schema (catch non-schema objects)
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            # Invalid - return empty schema
+            return Schema(type="object", properties={}, required=[])
+
+        # Also validate that all property values are dicts (schema objects)
+        for key, value in properties.items():
+            if not isinstance(value, dict):
+                # Invalid property value - skip this object
+                return Schema(type="object", properties={}, required=[])
+
+        try:
+            return Schema(type="object", properties=properties, required=required)
+        except Exception:
+            # Pydantic validation failed - return empty schema
+            return Schema(type="object", properties={}, required=[])
+
+    def _walk_tree(self, node: Node):
+        """
+        Walk tree recursively yielding all nodes.
+
+        Args:
+            node: Starting node
+
+        Yields:
+            All nodes in tree
+        """
+        yield node
+        for child in node.children:
+            yield from self._walk_tree(child)
 
     def _parse_typed_request_node(
         self, type_annotation_node: Node, source_code: bytes, interfaces: Dict[str, Schema]
@@ -842,7 +985,7 @@ class ExpressExtractor(BaseExtractor):
             source_code: Source code bytes
 
         Returns:
-            Metadata dictionary with query_params
+            Metadata dictionary with query_params and response_schema
         """
         metadata = {}
 
@@ -855,6 +998,16 @@ class ExpressExtractor(BaseExtractor):
         query_params = self._extract_query_params_from_body(body_node, source_code)
         if query_params:
             metadata["query_params"] = query_params
+
+        # Extract response schema from res.json() calls
+        response_schema = self._extract_response_from_body(body_node, source_code)
+        if response_schema:
+            metadata["response_schema"] = response_schema
+
+        # Extract response schema from res.json() calls
+        response_schema = self._extract_response_from_handler_body(body_node, source_code)
+        if response_schema:
+            metadata["response_schema"] = response_schema
 
         return metadata
 
@@ -900,6 +1053,225 @@ class ExpressExtractor(BaseExtractor):
 
         search_query_params(body_node)
         return params
+
+    def _extract_response_from_handler_body(
+        self, body_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Extract response schema from res.json() or res.status().json() calls.
+
+        Args:
+            body_node: Function body node
+            source_code: Source code bytes
+
+        Returns:
+            Response schema or None
+        """
+        # Find all call expressions that might be res.json()
+        json_calls = []
+
+        def find_json_calls(node):
+            if node.type == "call_expression":
+                func_node = node.child_by_field_name("function")
+                if func_node and func_node.type == "member_expression":
+                    # Check if it's .json() call
+                    prop_node = func_node.child_by_field_name("property")
+                    if prop_node:
+                        prop_text = self.parser.get_node_text(prop_node, source_code)
+                        if prop_text == "json":
+                            # Check if object is res or res.status()
+                            obj_node = func_node.child_by_field_name("object")
+                            if obj_node:
+                                obj_text = self.parser.get_node_text(obj_node, source_code)
+                                if "res" in obj_text:
+                                    json_calls.append(node)
+
+            for child in node.children:
+                find_json_calls(child)
+
+        find_json_calls(body_node)
+
+        # Parse first json call (usually the success response)
+        for call_node in json_calls:
+            args_node = call_node.child_by_field_name("arguments")
+            if not args_node:
+                continue
+
+            # Get first argument (the response data)
+            for arg_child in args_node.children:
+                if arg_child.type in (",", "(", ")", "comment"):
+                    continue
+
+                # Parse object literal
+                if arg_child.type == "object":
+                    schema = self._parse_object_literal_to_schema(arg_child, source_code)
+                    if schema:
+                        return schema
+
+                # Parse identifier (variable reference)
+                elif arg_child.type == "identifier":
+                    var_name = self.parser.get_node_text(arg_child, source_code)
+                    # Try to trace variable - look for variable declaration
+                    schema = self._trace_variable_in_scope(var_name, body_node, source_code)
+                    if schema:
+                        return schema
+
+                break  # Only process first argument
+
+        return None
+
+    def _infer_schema_from_value_node(
+        self, value_node: Node, source_code: bytes
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Infer schema dict from value node type (for inline object properties).
+
+        Args:
+            value_node: Value node
+            source_code: Source code bytes
+
+        Returns:
+            Schema dict or None
+        """
+        # String literal
+        if value_node.type == "string":
+            return {"type": "string"}
+
+        # Number literal
+        elif value_node.type == "number":
+            value_text = self.parser.get_node_text(value_node, source_code)
+            if "." in value_text:
+                return {"type": "number"}
+            else:
+                return {"type": "integer"}
+
+        # Boolean literal
+        elif value_node.type in ("true", "false"):
+            return {"type": "boolean"}
+
+        # Array
+        elif value_node.type == "array":
+            # Try to infer array item type from first element
+            for child in value_node.children:
+                if child.type not in (",", "[", "]", "comment"):
+                    item_schema = self._infer_schema_from_value_node(child, source_code)
+                    if item_schema:
+                        return {"type": "array", "items": item_schema}
+                    break
+            # Fallback to generic array
+            return {"type": "array"}
+
+        # Nested object
+        elif value_node.type == "object":
+            nested_schema = self._parse_object_literal_to_schema(value_node, source_code)
+            return {
+                "type": "object",
+                "properties": nested_schema.properties,
+                "required": nested_schema.required
+            }
+
+        # Call expression (e.g., new Date().toISOString(), process.uptime())
+        elif value_node.type == "call_expression":
+            func_node = value_node.child_by_field_name("function")
+            if func_node:
+                func_text = self.parser.get_node_text(func_node, source_code)
+
+                # Date/time patterns → string with date-time format
+                if "toISOString" in func_text:
+                    return {"type": "string", "format": "date-time"}
+                elif "toDateString" in func_text or "toTimeString" in func_text:
+                    return {"type": "string", "format": "date-time"}
+
+                # Generic string conversions
+                elif "toString" in func_text or "String(" in func_text:
+                    return {"type": "string"}
+
+                # Number patterns
+                elif "uptime" in func_text or "now" in func_text:
+                    return {"type": "number"}
+                elif "Date.now()" in func_text:
+                    return {"type": "number"}
+                elif "parseInt" in func_text or "Number(" in func_text:
+                    return {"type": "integer"}
+                elif "parseFloat" in func_text:
+                    return {"type": "number"}
+
+                # Boolean patterns
+                elif "Boolean(" in func_text:
+                    return {"type": "boolean"}
+
+                # Array/Object patterns
+                elif "JSON.parse" in func_text:
+                    return {"type": "object"}
+                elif "Array.from" in func_text or ".map(" in func_text or ".filter(" in func_text:
+                    return {"type": "array"}
+
+            # Default to object for unknown calls (safer than string)
+            return {"type": "object"}
+
+        # Member expression (e.g., req.params.id, process.env.NODE_ENV)
+        elif value_node.type == "member_expression":
+            # Default to string
+            return {"type": "string"}
+
+        # Identifier (variable reference like remover, R.without(names))
+        # These are function/variable references, not schema values
+        # Return None to skip - not a valid schema literal
+        elif value_node.type == "identifier":
+            return None
+
+        # Default: unknown type
+        return None
+
+    def _trace_variable_in_scope(
+        self, var_name: str, scope_node: Node, source_code: bytes
+    ) -> Optional[Schema]:
+        """
+        Trace variable back to its definition in the scope.
+
+        Args:
+            var_name: Variable name to trace
+            scope_node: Scope node to search in
+            source_code: Source code bytes
+
+        Returns:
+            Schema or None
+        """
+        # Look for variable declarations: const result = {...}
+        def find_variable_declaration(node):
+            if node.type in ("variable_declarator", "lexical_declaration"):
+                name_node = None
+                value_node = None
+
+                for child in node.children:
+                    if child.type == "variable_declarator":
+                        for decl_child in child.children:
+                            if decl_child.type == "identifier":
+                                name_node = decl_child
+                            elif decl_child.type == "object":
+                                value_node = decl_child
+                    elif child.type == "identifier":
+                        name_node = child
+                    elif child.type == "object":
+                        value_node = child
+
+                if name_node and value_node:
+                    name_text = self.parser.get_node_text(name_node, source_code)
+                    if name_text == var_name:
+                        return value_node
+
+            for child in node.children:
+                result = find_variable_declaration(child)
+                if result:
+                    return result
+
+            return None
+
+        value_node = find_variable_declaration(scope_node)
+        if value_node and value_node.type == "object":
+            return self._parse_object_literal_to_schema(value_node, source_code)
+
+        return None
 
     def _route_to_endpoints(self, route: Route) -> List[Endpoint]:
         """

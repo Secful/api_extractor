@@ -85,6 +85,9 @@ class NextJSExtractor(BaseExtractor):
         # Extract validation schemas (Zod)
         self._extract_validation_schemas(tree, source_code, language, file_path)
 
+        # Extract schemas from imported validation files
+        self._extract_schemas_from_validation_imports(tree, source_code, language, file_path)
+
         # Extract routes based on router type
         if router_type == "app":
             routes.extend(
@@ -209,6 +212,12 @@ class NextJSExtractor(BaseExtractor):
                 response_schema = self._extract_response_type_from_handler(match, source_code, file_path)
                 if response_schema:
                     metadata["response_schema"] = response_schema
+
+            # Fallback: try match response schema from validation imports
+            if method == HTTPMethod.GET and "response_schema" not in metadata:
+                validation_response_schema = self._match_response_schema_from_validation(route_path, method)
+                if validation_response_schema:
+                    metadata["response_schema"] = validation_response_schema
 
             location = self.parser.get_node_location(func_name_node)
 
@@ -860,6 +869,78 @@ class NextJSExtractor(BaseExtractor):
         )
         self.validation_schemas.update(zod_schemas)
 
+    def _extract_schemas_from_validation_imports(
+        self, tree, source_code: bytes, language: str, file_path: str
+    ) -> None:
+        """
+        Extract Zod schemas from imported validation files.
+
+        Looks for imports like:
+        import { rulesResponseSchema } from "./validation"
+
+        Args:
+            tree: Tree-sitter Tree
+            source_code: Source code bytes
+            language: Language
+            file_path: Current file path
+        """
+        if not self.zod_parser:
+            self.zod_parser = ZodParser(self.parser)
+
+        # Find imports from validation files
+        import_query = """
+        (import_statement
+          source: (string) @import_source)
+        """
+
+        matches = self.parser.query(tree, import_query, language)
+
+        for match in matches:
+            import_source_node = match.get("import_source")
+            if not import_source_node:
+                continue
+
+            import_path = self.parser.get_node_text(import_source_node, source_code)
+            import_path = import_path.strip('"\'')
+
+            # Only process validation files
+            if not ("validation" in import_path.lower() or import_path.endswith("/validation")):
+                continue
+
+            # Resolve import path to absolute path
+            if import_path.startswith("."):
+                # Relative import
+                import os
+                current_dir = os.path.dirname(file_path)
+                validation_path = os.path.normpath(os.path.join(current_dir, import_path))
+
+                # Try common extensions
+                for ext in [".ts", ".js", ".tsx", ".jsx"]:
+                    full_path = validation_path + ext
+                    if os.path.exists(full_path):
+                        validation_path = full_path
+                        break
+
+                if not os.path.exists(validation_path):
+                    continue
+
+                # Parse validation file
+                try:
+                    with open(validation_path, "rb") as f:
+                        validation_source = f.read()
+                except Exception:
+                    continue
+
+                validation_tree = self.parser.parse_source(validation_source, language)
+                if not validation_tree:
+                    continue
+
+                # Extract schemas from validation file
+                validation_schemas = self.zod_parser.extract_schemas_from_file(
+                    validation_tree, validation_source, language, validation_path
+                )
+                self.validation_schemas.update(validation_schemas)
+
     def _has_import(
         self, tree, source_code: bytes, language: str, module_names: List[str]
     ) -> bool:
@@ -962,3 +1043,57 @@ class NextJSExtractor(BaseExtractor):
             endpoints.append(endpoint)
 
         return endpoints
+
+    def _match_response_schema_from_validation(
+        self, route_path: str, method: HTTPMethod
+    ) -> Optional[Schema]:
+        """
+        Match response schema from validation imports by naming convention.
+
+        Pattern: rulesResponseSchema → GET /api/v1/rules
+                 statsByPeriodResponseSchema → GET /api/v1/stats/by-period
+
+        Args:
+            route_path: Route path like /api/v1/rules
+            method: HTTP method
+
+        Returns:
+            Schema if matched, None otherwise
+        """
+        # Extract path segments for matching
+        path_parts = [p for p in route_path.split("/") if p and not p.startswith("{")]
+
+        # Try different matching strategies
+        for schema_name, validation_schema in self.validation_schemas.items():
+            # Only consider schemas ending with ResponseSchema or responseSchema
+            if not (schema_name.endswith("ResponseSchema") or schema_name.endswith("responseSchema")):
+                continue
+
+            # Extract base name: rulesResponseSchema → rules
+            base_name = schema_name.replace("ResponseSchema", "").replace("responseSchema", "")
+
+            # Convert camelCase to kebab-case: statsByPeriod → stats-by-period
+            import re
+            kebab_name = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', base_name).lower()
+
+            # Strategy 1: Check if single path part matches
+            if kebab_name in path_parts or base_name.lower() in path_parts:
+                return validation_schema.schema
+
+            # Strategy 2: Check if path suffix matches multi-segment name
+            # /api/v1/stats/by-period matches statsByPeriodResponseSchema
+            path_suffix = "-".join(path_parts[-2:]) if len(path_parts) >= 2 else ""
+            if path_suffix == kebab_name:
+                return validation_schema.schema
+
+            # Also try 3-segment suffix: organizations/stats/rules-buckets
+            if len(path_parts) >= 3:
+                path_suffix_3 = "-".join(path_parts[-3:])
+                if path_suffix_3 == kebab_name:
+                    return validation_schema.schema
+
+            # Strategy 3: Singular/plural matching: rules → rule
+            if kebab_name.endswith('s') and kebab_name[:-1] in path_parts:
+                return validation_schema.schema
+
+        return None
